@@ -453,6 +453,11 @@ enum DevAutotestAction {
     DEV_AUTOTEST_ACTION_LOG_PREFERENCES,
     // Logs the saves (count, quick ones); FAIL when there aren't [a] of them.
     DEV_AUTOTEST_ACTION_LOG_SAVES,
+    // Wasteland Reborn: chooses the "[Speak freely]" option (FAIL without it).
+    DEV_AUTOTEST_ACTION_CHOOSE_FREE_TALK,
+    // Waits up to [a] frames for the free talk's answer (the node's options
+    // back, the reply not the typing hint or the thinking dots).
+    DEV_AUTOTEST_ACTION_WAIT_FREE_TALK,
 };
 
 struct DevAutotestStep {
@@ -1602,6 +1607,31 @@ static const DevAutotestStep kDevAutotestPcPartySteps[] = {
     { DEV_AUTOTEST_ACTION_KEY, SDL_SCANCODE_ESCAPE, 0, 0, 60, "p05_back_to_control" },
     { DEV_AUTOTEST_ACTION_KEY, SDL_SCANCODE_ESCAPE, 0, 0, 60, "p06_back_to_talk" },
     { DEV_AUTOTEST_ACTION_LOG_DIALOG, 0, 0, 0, 1, "p07_state" },
+};
+
+// Wasteland Reborn: free talk with Vic from the test save (slot 10, Vic in
+// the party), through the NPC brain ([ai] in fallout2.cfg). Works with the
+// game's windows and with the mobile UI. SDL text events take 31 bytes: the
+// lines are typed in pieces.
+static const DevAutotestStep kDevAutotestFreeTalkSteps[] = {
+    { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 30, "f00_start" },
+    { DEV_AUTOTEST_ACTION_LOAD_GAME, 9, 0, 0, 120, "f01_loaded" },
+    { DEV_AUTOTEST_ACTION_TALK_PARTY_MEMBER, 62, 0, 0, 60, "f02_talk_vic" },
+    { DEV_AUTOTEST_ACTION_WAIT_TALKING, 600, 0, 0, 30, "f02b_talking" },
+    { DEV_AUTOTEST_ACTION_LOG_DIALOG, 0, 0, 0, 1, "f03_options" },
+    { DEV_AUTOTEST_ACTION_CHOOSE_FREE_TALK, 0, 0, 0, 20, "f04_speak_freely" },
+    { DEV_AUTOTEST_ACTION_TYPE_TEXT, 0, 0, 0, 2, "f05a_type", "Vic, remember who got you " },
+    { DEV_AUTOTEST_ACTION_TYPE_TEXT, 0, 0, 0, 2, "f05b_type", "out of the Den? Who was it?" },
+    { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 10, "f05c_typed" },
+    { DEV_AUTOTEST_ACTION_KEY, SDL_SCANCODE_RETURN, 0, 0, 10, "f06_said" },
+    { DEV_AUTOTEST_ACTION_WAIT_FREE_TALK, 4200, 0, 0, 20, "f07_answer" },
+    { DEV_AUTOTEST_ACTION_LOG_DIALOG, 0, 0, 0, 1, "f08_state" },
+    { DEV_AUTOTEST_ACTION_CHOOSE_FREE_TALK, 0, 0, 0, 20, "f09_speak_again" },
+    { DEV_AUTOTEST_ACTION_TYPE_TEXT, 0, 0, 0, 2, "f10a_type", "Let's trade. Show me what " },
+    { DEV_AUTOTEST_ACTION_TYPE_TEXT, 0, 0, 0, 2, "f10b_type", "you're carrying." },
+    { DEV_AUTOTEST_ACTION_KEY, SDL_SCANCODE_RETURN, 0, 0, 10, "f11_said" },
+    { DEV_AUTOTEST_ACTION_WAIT_FREE_TALK, 4200, 0, 0, 60, "f12_answer" },
+    { DEV_AUTOTEST_ACTION_LOG_DIALOG, 0, 0, 0, 1, "f13_state" },
 };
 
 // The game's own character screen (run with [touch] mobile_ui=0).
@@ -2816,6 +2846,9 @@ void devAutotestSetScenario(const char* name)
         gDevAutotestSteps = kDevAutotestMuiMainMenuEmptySteps;
         gDevAutotestStepCount = sizeof(kDevAutotestMuiMainMenuEmptySteps) / sizeof(kDevAutotestMuiMainMenuEmptySteps[0]);
         gDevAutotestSaves = DevAutotestSaves::Empty;
+    } else if (strcmp(name, "freetalk") == 0) {
+        gDevAutotestSteps = kDevAutotestFreeTalkSteps;
+        gDevAutotestStepCount = sizeof(kDevAutotestFreeTalkSteps) / sizeof(kDevAutotestFreeTalkSteps[0]);
     } else if (strcmp(name, "pccharacter") == 0) {
         gDevAutotestSteps = kDevAutotestPcCharacterSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestPcCharacterSteps) / sizeof(kDevAutotestPcCharacterSteps[0]);
@@ -3332,6 +3365,23 @@ void devAutotestTick()
         return;
     }
 
+    if (step->action == DEV_AUTOTEST_ACTION_WAIT_FREE_TALK && !gDevAutotestStepStarted) {
+        static int waited = 0;
+        const char* reply = gameDialogGetReplyText();
+        bool answered = gameDialogGetOptionCount() > 1
+            && strncmp(reply, "...", 3) != 0
+            && strncmp(reply, "(Type", 5) != 0;
+        if (!answered && waited < static_cast<int>(step->a)) {
+            waited++;
+            return;
+        }
+        devAutotestLog("  free talk %s after %d frames\n", answered ? "answered" : "NOT ANSWERED", waited);
+        if (!answered) {
+            devAutotestLog("FAIL: no free talk answer\n");
+        }
+        waited = 0;
+    }
+
     if (step->action == DEV_AUTOTEST_ACTION_WAIT_TALKING && !gDevAutotestStepStarted) {
         static int waited = 0;
         bool talking = gameDialogIsTalking() && gameDialogGetOptionCount() > 0;
@@ -3546,6 +3596,22 @@ void devAutotestTick()
                     view.settings[0], view.settings[1], view.settings[2], view.settings[3], view.settings[4], view.settings[5]);
             } else {
                 devAutotestLog("  party control: none\n");
+            }
+            break;
+        }
+        case DEV_AUTOTEST_ACTION_CHOOSE_FREE_TALK: {
+            int found = -1;
+            for (int index = 0; index < gameDialogGetOptionCount(); index++) {
+                if (strstr(gameDialogGetOptionText(index), "[Speak freely]") != nullptr) {
+                    found = index;
+                }
+            }
+            if (found == -1) {
+                devAutotestLog("FAIL: no free talk option\n");
+            } else if (muiIsEnabled()) {
+                gameDialogChooseOption(found);
+            } else {
+                enqueueInputEvent(KEY_1 + found);
             }
             break;
         }

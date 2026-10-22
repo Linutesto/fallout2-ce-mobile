@@ -372,6 +372,8 @@ set(FALLOUT_PLATFORM_SOURCES
     "src/hud_layout.h"
     "src/mui.cc"
     "src/mui.h"
+    "src/npc_brain.cc"
+    "src/npc_brain.h"
     "src/mui_dialog.cc"
     "src/mui_action_list.cc"
     "src/mui_automap.cc"

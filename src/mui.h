@@ -256,6 +256,8 @@ bool muiForgetMissingFingers(const SDL_FingerID* down, int count);
 
 // input.cc: typed text (UTF-8).
 void muiHandleTextInput(const char* text);
+// Typed text not taken yet, for loops outside a mui screen.
+std::u32string muiTakeTextInput();
 
 // Back (Android's back button): at the next frame the topmost active modal
 // screen's `back()`, or with none the overlays' (the HUD opens the game's

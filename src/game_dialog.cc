@@ -4,6 +4,9 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
+
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -38,6 +41,7 @@
 #include "mouse.h"
 #include "mui.h"
 #include "mui_notify.h"
+#include "npc_brain.h"
 #include "object.h"
 #include "party_member.h"
 #include "perk.h"
@@ -46,6 +50,7 @@
 #include "random.h"
 #include "scripts.h"
 #include "settings.h"
+#include "sfall_global_vars.h"
 #include "skill.h"
 #include "stat.h"
 #include "svga.h"
@@ -151,6 +156,8 @@ typedef struct GameDialogOptionEntry {
     int top;
     char text[900];
     int bottom;
+    // CE (Wasteland Reborn): the "speak freely" option (npc_brain.h).
+    bool aiTalk;
 } GameDialogOptionEntry;
 
 // Provides button configuration for party member combat control and
@@ -730,6 +737,8 @@ static int _gdProcessExit();
 static void gameDialogRenderCaps();
 static int gameDialogProcessUI();
 static int _gdProcessChoice(int optionIndex);
+static void gameDialogAddFreeTalkOption();
+static int gameDialogFreeTalk();
 static void gameDialogOptionOnMouseEnter(int optionIndex);
 static void gameDialogOptionOnMouseExit(int optionIndex);
 static void gameDialogRenderReply();
@@ -830,6 +839,7 @@ int gameDialogInit()
 {
     muiGameDialogInit();
     muiBarterInit();
+    npcBrainInit();
 
     // SFALL: Prevents from using 0 to escape from dialogue at any time.
     gameDialogFix = true;
@@ -857,6 +867,7 @@ int gameDialogReset()
 // NOTE: Uncollapsed 0x444D20.
 int gameDialogExit()
 {
+    npcBrainExit();
     muiBarterExit();
     muiGameDialogExit();
     return _gdialogReset();
@@ -1409,6 +1420,7 @@ int _gdialogGo()
     }
 
     if (rc != -1) {
+        gameDialogAddFreeTalkOption();
         rc = gameDialogProcessUI();
     }
 
@@ -1492,6 +1504,7 @@ int gameDialogAddMessageOption(int messageListId, int messageId, int reaction)
     optionEntry->reaction = reaction;
     optionEntry->btn = -1;
     optionEntry->text[0] = '\0';
+    optionEntry->aiTalk = false;
 
     gameDialogOptionEntriesLength++;
 
@@ -1511,6 +1524,7 @@ int gameDialogAddTextOption(int messageListId, const char* text, int reaction)
     optionEntry->messageId = -4;
     optionEntry->reaction = reaction;
     optionEntry->btn = -1;
+    optionEntry->aiTalk = false;
 
     // SFALL
     if (numberOptions) {
@@ -2407,6 +2421,293 @@ int gameDialogProcessUI()
     return 0;
 }
 
+// CE (Wasteland Reborn): free talk with the speaker through the NPC brain
+// (npc_brain.h). The node's own options stay; one more, "[Speak freely]",
+// lets the player type a line. The brain's answer becomes the reply, the
+// node's options come back, and an intent the engine allowed (barter) is run
+// by the engine's own functions. Unanswered, the node's reply comes back.
+
+static constexpr size_t kFreeTalkMaxInput = 240;
+
+static const char* gameDialogFreeTalkLabel()
+{
+    return "[Speak freely]";
+}
+
+static void gameDialogAddFreeTalkOption()
+{
+    if (gGameDialogSpeaker == nullptr || isInCombat()) {
+        return;
+    }
+
+    if (!npcBrainOffersTalk(gGameDialogSpeaker->pid)) {
+        return;
+    }
+
+    if (gameDialogOptionEntriesLength >= DIALOG_OPTION_ENTRIES_CAPACITY) {
+        return;
+    }
+
+    dialogOptionEntries[gameDialogOptionEntriesLength].proc = 0;
+    if (gameDialogAddTextOption(-4, gameDialogFreeTalkLabel(), GAME_DIALOG_REACTION_NEUTRAL) == 0) {
+        dialogOptionEntries[gameDialogOptionEntriesLength - 1].aiTalk = true;
+    }
+}
+
+// The campaign's id, kept in the save (sfall global), so two games with the
+// same hero don't share NPC memories.
+static std::string gameDialogFreeTalkCampaign()
+{
+    int id = 0;
+    sfall_gl_vars_fetch("WRCAMPID", id);
+    if (id == 0) {
+        id = static_cast<int>((static_cast<unsigned int>(time(nullptr)) ^ (static_cast<unsigned int>(randomBetween(1, 0x7FFF)) << 16)) & 0x7FFFFFFF);
+        if (id == 0) {
+            id = 1;
+        }
+        sfall_gl_vars_store("WRCAMPID", id);
+    }
+
+    return std::string(critterGetName(gDude)) + "|" + std::to_string(id);
+}
+
+static void gameDialogFreeTalkShow(const char* reply, const char* option)
+{
+    snprintf(dialogReplyText, sizeof(dialogReplyText), "%s", reply);
+    dialogReplyMessageListId = -4;
+    dialogReplyMessageId = -4;
+    dialogReplyTextOffset = 0;
+
+    gameDialogOptionEntriesLength = 0;
+    if (option != nullptr) {
+        GameDialogOptionEntry* entry = &(dialogOptionEntries[0]);
+        entry->messageListId = -4;
+        entry->messageId = -4;
+        entry->reaction = GAME_DIALOG_REACTION_NEUTRAL;
+        entry->proc = 0;
+        entry->btn = -1;
+        entry->aiTalk = false;
+        snprintf(entry->text, sizeof(entry->text), "%s", option);
+        gameDialogOptionEntriesLength = 1;
+    }
+
+    _gdProcessCleanup();
+    _gdProcessUpdate();
+}
+
+// Returns 0 with the typed line, -1 when the player gave up.
+static int gameDialogFreeTalkInput(std::string* typed)
+{
+    const char* hint = "(Type what you say. Enter to speak, Enter on an empty line or Esc to cancel.)";
+
+    beginTextInput();
+    muiTakeTextInput();
+
+    bool dirty = true;
+    int rc = 1;
+    while (rc == 1) {
+        sharedFpsLimiter.mark();
+
+        if (dirty) {
+            std::string line = "> " + *typed + "_";
+            gameDialogFreeTalkShow(hint, line.c_str());
+            dirty = false;
+        }
+
+        int keyCode = inputGetInput();
+
+        devAutotestTick();
+
+        if (_game_user_wants_to_quit != GAME_QUIT_REQUEST_NONE || keyCode == KEY_ESCAPE) {
+            rc = -1;
+        } else if (keyCode == KEY_RETURN) {
+            rc = typed->empty() ? -1 : 0;
+        } else if ((keyCode == KEY_BACKSPACE || keyCode == KEY_DELETE) && !typed->empty()) {
+            typed->pop_back();
+            dirty = true;
+        }
+
+        for (char32_t ch : muiTakeTextInput()) {
+            if (ch >= 0x20 && ch < 0x7F && typed->size() < kFreeTalkMaxInput) {
+                typed->push_back(static_cast<char>(ch));
+                dirty = true;
+            }
+        }
+
+        // The mobile talk screen: a tap on the typed line says it.
+        if (rc == 1 && gGameDialogChosenOption != -1) {
+            gGameDialogChosenOption = -1;
+            rc = typed->empty() ? -1 : 0;
+        }
+
+        renderPresent();
+        sharedFpsLimiter.throttle();
+    }
+
+    endTextInput();
+    return rc;
+}
+
+static void gameDialogFreeTalkFillRequest(NpcBrainRequest* request, const std::string& say, const char* reply, const std::vector<GameDialogOptionEntry>& options)
+{
+    Object* speaker = gGameDialogSpeaker;
+
+    request->campaign = gameDialogFreeTalkCampaign();
+    request->npcPid = speaker->pid;
+    request->npcName = critterGetName(speaker);
+    request->map = gMapHeader.name;
+    char* mapName = mapGetName(mapGetCurrentMap(), gElevation);
+    request->mapName = mapName != nullptr ? mapName : "";
+    request->partyMember = objectIsPartyMember(speaker);
+    request->canBarter = gameDialogSpeakerCanBarter() || request->partyMember;
+
+    Inventory* inventory = &(speaker->data.inventory);
+    for (int index = 0; index < inventory->length && request->inventory.size() < 40; index++) {
+        InventoryItem* inventoryItem = &(inventory->items[index]);
+        NpcBrainItem item;
+        item.pid = inventoryItem->item->pid;
+        item.name = objectGetName(inventoryItem->item);
+        item.quantity = inventoryItem->quantity;
+        request->inventory.push_back(item);
+    }
+    request->npcCaps = itemGetTotalCaps(speaker);
+
+    request->playerName = critterGetName(gDude);
+    request->playerSex = critterGetStat(gDude, STAT_GENDER) == GENDER_FEMALE ? "female" : "male";
+    request->playerLevel = pcGetStat(PC_STAT_LEVEL);
+    request->karma = gameGetGlobalVar(GVAR_PLAYER_REPUTATION);
+    for (int stat = 0; stat < 7; stat++) {
+        request->stats[stat] = critterGetStat(gDude, static_cast<Stat>(STAT_STRENGTH + stat));
+    }
+    request->playerCaps = itemGetTotalCaps(gDude);
+
+    int month;
+    int day;
+    int year;
+    gameTimeGetDate(&month, &day, &year);
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%04d-%02d-%02d", year, month, day);
+    request->date = buffer;
+    int hour = gameTimeGetHour();
+    snprintf(buffer, sizeof(buffer), "%02d:%02d", hour / 100, hour % 100);
+    request->time = buffer;
+
+    request->reply = npcBrainSanitize(reply, 300);
+    for (const GameDialogOptionEntry& option : options) {
+        if (!option.aiTalk && request->options.size() < 12) {
+            request->options.push_back(npcBrainSanitize(option.text, 300));
+        }
+    }
+
+    request->allowedIntents.push_back("none");
+    request->allowedIntents.push_back("end_talk");
+    if (request->canBarter) {
+        request->allowedIntents.push_back("open_barter");
+    }
+
+    request->say = say;
+}
+
+// Waits for the answer, the reply showing that the speaker thinks. Esc gives
+// up waiting (the answer is dropped when it comes).
+static bool gameDialogFreeTalkWait(const std::shared_ptr<NpcBrainCall>& call, NpcBrainResponse* response)
+{
+    unsigned int start = getTicks();
+    unsigned int timeoutMs = npcBrainTimeoutMs() + 1000;
+    int shownDots = -1;
+
+    for (;;) {
+        sharedFpsLimiter.mark();
+
+        NpcBrainStatus status = call->status();
+        if (status != NpcBrainStatus::Pending) {
+            *response = call->response();
+            return status == NpcBrainStatus::Done;
+        }
+
+        unsigned int elapsed = getTicksSince(start);
+        if (elapsed > timeoutMs) {
+            response->error = "engine timeout";
+            return false;
+        }
+
+        int dots = static_cast<int>((elapsed / 400) % 4);
+        if (dots != shownDots) {
+            static const char* kThinking[4] = { "...", "....", ".....", "......" };
+            gameDialogFreeTalkShow(kThinking[dots], nullptr);
+            shownDots = dots;
+        }
+
+        int keyCode = inputGetInput();
+
+        devAutotestTick();
+
+        if (_game_user_wants_to_quit != GAME_QUIT_REQUEST_NONE || keyCode == KEY_ESCAPE) {
+            response->error = "cancelled";
+            return false;
+        }
+
+        renderPresent();
+        sharedFpsLimiter.throttle();
+    }
+}
+
+static int gameDialogFreeTalk()
+{
+    std::vector<GameDialogOptionEntry> options(dialogOptionEntries, dialogOptionEntries + gameDialogOptionEntriesLength);
+    std::string originalReply = dialogReplyText;
+
+    mouseShowCursor();
+
+    std::string typed;
+    std::string reply = originalReply;
+    std::string intent = "none";
+
+    if (gameDialogFreeTalkInput(&typed) == 0) {
+        NpcBrainRequest request;
+        gameDialogFreeTalkFillRequest(&request, typed, originalReply.c_str(), options);
+
+        std::shared_ptr<NpcBrainCall> call = npcBrainTalk(request);
+        NpcBrainResponse response;
+        std::string said = "> " + typed;
+        if (gameDialogFreeTalkWait(call, &response)) {
+            gameDialogSetReviewOptionText(said.c_str());
+            gameDialogAddReviewText(response.say.c_str());
+            reply = response.say;
+            intent = response.intent;
+            debugPrint("\nNPC brain: %s (%s) says [%s], intent %s\n", request.npcName.c_str(), response.source.c_str(), response.say.c_str(), intent.c_str());
+        } else {
+            // The original dialog goes on.
+            debugPrint("\nNPC brain: no answer (%s)\n", response.error.c_str());
+            if (response.error != "cancelled") {
+                displayMonitorAddMessage("No answer. The conversation goes on as before.");
+            }
+        }
+    }
+
+    // The node's options again, the answer (or the node's reply) above them.
+    std::copy(options.begin(), options.end(), dialogOptionEntries);
+    for (size_t index = 0; index < options.size(); index++) {
+        dialogOptionEntries[index].btn = -1;
+    }
+    gameDialogOptionEntriesLength = static_cast<int>(options.size());
+
+    snprintf(dialogReplyText, sizeof(dialogReplyText), "%s", reply.c_str());
+    dialogReplyMessageListId = -4;
+    dialogReplyMessageId = -4;
+    dialogReplyTextOffset = 0;
+
+    _gdProcessCleanup();
+    _gdProcessUpdate();
+
+    // The engine runs what it allowed: barter is the game's own barter.
+    if (intent == "open_barter") {
+        gameDialogBarterButtonUpMouseUp(-1, -1);
+    }
+
+    return 0;
+}
+
 // 0x4468DC
 int _gdProcessChoice(int optionIndex)
 {
@@ -2419,6 +2720,10 @@ int _gdProcessChoice(int optionIndex)
     // to preserve original behaviour this dummy dialog option entry is used.
     GameDialogOptionEntry dummy;
     memset(&dummy, 0, sizeof(dummy));
+
+    if (optionIndex >= 0 && optionIndex < gameDialogOptionEntriesLength && dialogOptionEntries[optionIndex].aiTalk) {
+        return gameDialogFreeTalk();
+    }
 
     mouseHideCursor();
     _gdProcessCleanup();

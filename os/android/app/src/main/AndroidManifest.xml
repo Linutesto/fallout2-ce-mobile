@@ -42,6 +42,8 @@
 
     <!-- Allow access to the vibrator -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Wasteland Reborn: NPC brain over the local network (Tailscale). -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- if you want to capture audio, uncomment this. -->
     <!-- <uses-permission android:name="android.permission.RECORD_AUDIO" /> -->

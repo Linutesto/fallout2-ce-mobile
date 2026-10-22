@@ -1017,6 +1017,13 @@ void muiHandleTextInput(const char* text)
     gTextInput += muiDecodeUtf8(text);
 }
 
+std::u32string muiTakeTextInput()
+{
+    std::u32string text;
+    text.swap(gTextInput);
+    return text;
+}
+
 bool muiHandleFingerEvent(const SDL_Event* event)
 {
     const SDL_TouchFingerEvent& finger = event->tfinger;
