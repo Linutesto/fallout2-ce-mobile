@@ -1634,6 +1634,28 @@ static const DevAutotestStep kDevAutotestFreeTalkSteps[] = {
     { DEV_AUTOTEST_ACTION_LOG_DIALOG, 0, 0, 0, 1, "f13_state" },
 };
 
+// A nonparty native NPC: exercises the service fallback, not a curated persona.
+static const DevAutotestStep kDevAutotestFreeTalkNativeSteps[] = {
+    { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 30, "f00_start" },
+    { DEV_AUTOTEST_ACTION_LOAD_GAME, 9, 0, 0, 120, "f01_loaded" },
+    { DEV_AUTOTEST_ACTION_TALK_TO_PID, 29, 0, 0, 60, "f02_talk_elder" },
+    { DEV_AUTOTEST_ACTION_WAIT_TALKING, 600, 0, 0, 30, "f02b_talking" },
+    { DEV_AUTOTEST_ACTION_LOG_DIALOG, 0, 0, 0, 1, "f03_options" },
+    { DEV_AUTOTEST_ACTION_CHOOSE_FREE_TALK, 0, 0, 0, 20, "f04_speak_freely" },
+    { DEV_AUTOTEST_ACTION_TYPE_TEXT, 0, 0, 0, 2, "f05a_type", "Hello. Who are you and what " },
+    { DEV_AUTOTEST_ACTION_TYPE_TEXT, 0, 0, 0, 2, "f05b_type", "do you do here?" },
+    { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 10, "f05c_typed" },
+    { DEV_AUTOTEST_ACTION_KEY, SDL_SCANCODE_RETURN, 0, 0, 10, "f06_said" },
+    { DEV_AUTOTEST_ACTION_WAIT_FREE_TALK, 4200, 0, 0, 20, "f07_answer" },
+    { DEV_AUTOTEST_ACTION_LOG_DIALOG, 0, 0, 0, 1, "f08_state" },
+    { DEV_AUTOTEST_ACTION_CHOOSE_FREE_TALK, 0, 0, 0, 20, "f09_speak_again" },
+    { DEV_AUTOTEST_ACTION_TYPE_TEXT, 0, 0, 0, 2, "f10a_type", "We spoke a moment ago. " },
+    { DEV_AUTOTEST_ACTION_TYPE_TEXT, 0, 0, 0, 2, "f10b_type", "What did I ask you?" },
+    { DEV_AUTOTEST_ACTION_KEY, SDL_SCANCODE_RETURN, 0, 0, 10, "f11_said" },
+    { DEV_AUTOTEST_ACTION_WAIT_FREE_TALK, 4200, 0, 0, 60, "f12_answer" },
+    { DEV_AUTOTEST_ACTION_LOG_DIALOG, 0, 0, 0, 1, "f13_state" },
+};
+
 // The game's own character screen (run with [touch] mobile_ui=0).
 static const DevAutotestStep kDevAutotestPcCharacterSteps[] = {
     { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 30, "c00_start" },
@@ -2846,6 +2868,9 @@ void devAutotestSetScenario(const char* name)
         gDevAutotestSteps = kDevAutotestMuiMainMenuEmptySteps;
         gDevAutotestStepCount = sizeof(kDevAutotestMuiMainMenuEmptySteps) / sizeof(kDevAutotestMuiMainMenuEmptySteps[0]);
         gDevAutotestSaves = DevAutotestSaves::Empty;
+    } else if (strcmp(name, "freetalk-native") == 0) {
+        gDevAutotestSteps = kDevAutotestFreeTalkNativeSteps;
+        gDevAutotestStepCount = sizeof(kDevAutotestFreeTalkNativeSteps) / sizeof(kDevAutotestFreeTalkNativeSteps[0]);
     } else if (strcmp(name, "freetalk") == 0) {
         gDevAutotestSteps = kDevAutotestFreeTalkSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestFreeTalkSteps) / sizeof(kDevAutotestFreeTalkSteps[0]);

@@ -28,6 +28,7 @@
 #include "display_monitor.h"
 #include "draw.h"
 #include "game.h"
+#include "game_config.h"
 #include "game_mouse.h"
 #include "game_sound.h"
 #include "input.h"
@@ -2553,6 +2554,11 @@ static void gameDialogFreeTalkFillRequest(NpcBrainRequest* request, const std::s
     Object* speaker = gGameDialogSpeaker;
 
     request->campaign = gameDialogFreeTalkCampaign();
+    char* contentId = nullptr;
+    if (configGetString(&gGameConfig, "ai", "content_id", &contentId) && contentId != nullptr && contentId[0] != '\0') {
+        request->contentId = contentId;
+    }
+    request->npcInstance = std::to_string(speaker->id);
     request->npcPid = speaker->pid;
     request->npcName = critterGetName(speaker);
     request->map = gMapHeader.name;

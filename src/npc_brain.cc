@@ -609,6 +609,7 @@ namespace {
         std::mutex mutex;
         BrainConfig config;
         std::set<int> pids;
+        bool allDialogueNpcs = false;
         bool fetching = false;
         bool fetchedOnce = false;
         Clock::time_point lastFetch;
@@ -629,11 +630,14 @@ namespace {
         int status = httpRequest(config.endpoint, "GET", "/v1/npc/personas", config.token, "", kPersonaTimeoutMs, &body, &error);
 
         std::set<int> pids;
+        bool allDialogueNpcs = false;
         bool ok = false;
         if (status == 200) {
             JsonValue root;
             JsonParser parser(body);
             if (parser.parse(&root)) {
+                const JsonValue* all = root.get("all_dialogue_npcs");
+                allDialogueNpcs = all != nullptr && all->type == JsonValue::Type::Bool && all->boolean;
                 const JsonValue* list = root.get("pids");
                 if (list != nullptr && list->type == JsonValue::Type::Array) {
                     ok = true;
@@ -654,6 +658,7 @@ namespace {
         std::lock_guard<std::mutex> lock(brain->mutex);
         // A failed fetch turns free talk off until the service answers again.
         brain->pids = ok ? std::move(pids) : std::set<int>();
+        brain->allDialogueNpcs = ok && allDialogueNpcs;
         brain->fetching = false;
         brain->fetchedOnce = true;
         brain->lastFetch = Clock::now();
@@ -753,6 +758,9 @@ std::string npcBrainRequestToJson(const NpcBrainRequest& request)
     out += "1,";
     jsonAppendKey(out, "campaign");
     jsonAppendString(out, request.campaign);
+    out += ",";
+    jsonAppendKey(out, "content");
+    jsonAppendString(out, request.contentId);
 
     out += ",";
     jsonAppendKey(out, "npc");
@@ -761,6 +769,9 @@ std::string npcBrainRequestToJson(const NpcBrainRequest& request)
     out += std::to_string(request.npcPid) + ",";
     jsonAppendKey(out, "name");
     jsonAppendString(out, request.npcName);
+    out += ",";
+    jsonAppendKey(out, "instance");
+    jsonAppendString(out, request.npcInstance);
     out += ",";
     jsonAppendKey(out, "map");
     jsonAppendString(out, request.map);
@@ -950,7 +961,8 @@ bool npcBrainOffersTalk(int pid)
     requestPersonaRefresh(gBrain, false);
 
     std::lock_guard<std::mutex> lock(gBrain->mutex);
-    return gBrain->config.enabled && gBrain->pids.count(pid) != 0;
+    return gBrain->config.enabled && (gBrain->pids.count(pid) != 0
+        || (gBrain->allDialogueNpcs && pid > 0x01000000 && pid < 0x02000000));
 }
 
 unsigned int npcBrainTimeoutMs()

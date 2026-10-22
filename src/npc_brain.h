@@ -29,6 +29,8 @@ struct NpcBrainItem {
 
 struct NpcBrainRequest {
     std::string campaign;
+    std::string contentId = "fallout2";
+    std::string npcInstance;
     int npcPid = 0;
     std::string npcName;
     std::string map;
