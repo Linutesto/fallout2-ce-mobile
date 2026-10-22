@@ -1,4 +1,5 @@
 #include "sfall_ext.h"
+#include "sfall_filesystem.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -170,7 +171,7 @@ bool sfallSaveGameData(File* stream)
         }
     }
 
-    return true;
+    return sfallFileSystemSave(stream);
 }
 
 bool sfallLoadGameData(File* stream)
@@ -223,7 +224,7 @@ bool sfallLoadGameData(File* stream)
         drugEffectEventsSetLoadedPids(drugPids);
     }
 
-    return true;
+    return sfallFileSystemLoad(stream);
 }
 
 } // namespace fallout

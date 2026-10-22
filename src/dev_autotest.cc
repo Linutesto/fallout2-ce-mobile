@@ -1638,7 +1638,7 @@ static const DevAutotestStep kDevAutotestFreeTalkSteps[] = {
 static const DevAutotestStep kDevAutotestFreeTalkNativeSteps[] = {
     { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 30, "f00_start" },
     { DEV_AUTOTEST_ACTION_LOAD_GAME, 9, 0, 0, 120, "f01_loaded" },
-    { DEV_AUTOTEST_ACTION_TALK_TO_PID, 29, 0, 0, 60, "f02_talk_elder" },
+    { DEV_AUTOTEST_ACTION_TALK_TO_PID, 13, 0, 0, 60, "f02_talk_elder" },
     { DEV_AUTOTEST_ACTION_WAIT_TALKING, 600, 0, 0, 30, "f02b_talking" },
     { DEV_AUTOTEST_ACTION_LOG_DIALOG, 0, 0, 0, 1, "f03_options" },
     { DEV_AUTOTEST_ACTION_CHOOSE_FREE_TALK, 0, 0, 0, 20, "f04_speak_freely" },

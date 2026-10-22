@@ -187,6 +187,7 @@ static File* fileOpenImpl(const char* filename, const char* mode, bool useAliase
         && strchr(mode, '+') == nullptr;
 
     if (useAliases && readOnly) {
+        if (File* virtualFile = sfallFileSystemOpen(filename)) return virtualFile;
         char resolvedPath[COMPAT_MAX_PATH];
         if (sfallFileSystemResolveAlias(filename, resolvedPath, sizeof(resolvedPath))) {
             File* stream = fileOpenImpl(resolvedPath, mode, false);

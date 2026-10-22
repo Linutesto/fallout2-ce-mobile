@@ -2237,8 +2237,60 @@ static void op_fs_create(Program* program)
 {
     int size = programStackPopInteger(program);
     char* path = programStackPopString(program);
-    programPrintError("fs_create: not implemented!");
-    programStackPushInteger(program, -1);
+    programStackPushInteger(program, sfallFileSystemCreate(path, size));
+}
+
+static void op_fs_seek(Program* program) {
+    int pos = programStackPopInteger(program);
+    int id = programStackPopInteger(program);
+    sfallFileSystemSeek(id, pos);
+}
+static void op_fs_resize(Program* program) {
+    int size = programStackPopInteger(program);
+    int id = programStackPopInteger(program);
+    sfallFileSystemResize(id, size);
+}
+static void op_fs_size(Program* program) { programStackPushInteger(program, sfallFileSystemSize(programStackPopInteger(program))); }
+static void op_fs_pos(Program* program) { programStackPushInteger(program, sfallFileSystemPos(programStackPopInteger(program))); }
+static void op_fs_write_byte(Program* program) {
+    int value = programStackPopInteger(program);
+    int id = programStackPopInteger(program); sfallFileSystemWrite(id, value, 1);
+}
+static void op_fs_read_byte(Program* program) {
+    unsigned int value = sfallFileSystemRead(programStackPopInteger(program), 1);
+    programStackPushInteger(program, static_cast<int>(value));
+}
+static void op_fs_write_short(Program* program) {
+    int value = programStackPopInteger(program);
+    int id = programStackPopInteger(program); sfallFileSystemWrite(id, value, 2);
+}
+static void op_fs_read_short(Program* program) {
+    unsigned int value = sfallFileSystemRead(programStackPopInteger(program), 2);
+    programStackPushInteger(program, static_cast<short>(value));
+}
+static void op_fs_write_int(Program* program) {
+    int value = programStackPopInteger(program);
+    int id = programStackPopInteger(program); sfallFileSystemWrite(id, value, 4);
+}
+static void op_fs_read_int(Program* program) {
+    unsigned int value = sfallFileSystemRead(programStackPopInteger(program), 4);
+    programStackPushInteger(program, static_cast<int>(value));
+}
+static void op_fs_write_float(Program* program) {
+    float value = programStackPopFloat(program); unsigned int bits; memcpy(&bits, &value, 4);
+    int id = programStackPopInteger(program); sfallFileSystemWrite(id, bits, 4);
+}
+static void op_fs_read_float(Program* program) {
+    unsigned int bits = sfallFileSystemRead(programStackPopInteger(program), 4);
+    float value; memcpy(&value, &bits, 4); programStackPushFloat(program, value);
+}
+static void op_fs_write_string(Program* program) {
+    char* value = programStackPopString(program);
+    int id = programStackPopInteger(program); sfallFileSystemWriteString(id, value, true);
+}
+static void op_fs_write_bstring(Program* program) {
+    char* value = programStackPopString(program);
+    int id = programStackPopInteger(program); sfallFileSystemWriteString(id, value, false);
 }
 
 static void op_fs_delete(Program* program)
@@ -2635,21 +2687,35 @@ void sfallOpcodesInit()
     // 0x81f9 - int   fs_find(string path)
     interpreterRegisterOpcode(0x81f9, op_fs_find);
     // 0x81fa - void  fs_write_byte(int id, int data)
+    interpreterRegisterOpcode(0x81fa, op_fs_write_byte);
     // 0x81fb - void  fs_write_short(int id, int data)
+    interpreterRegisterOpcode(0x81fb, op_fs_write_short);
     // 0x81fc - void  fs_write_int(int id, int data)
+    interpreterRegisterOpcode(0x81fc, op_fs_write_int);
     // 0x81fd - void  fs_write_float(int id, int data)
+    interpreterRegisterOpcode(0x81fd, op_fs_write_float);
     // 0x81fe - void  fs_write_string(int id, string data)
+    interpreterRegisterOpcode(0x81fe, op_fs_write_string);
     // 0x8208 - void  fs_write_bstring(int id, string data)
+    interpreterRegisterOpcode(0x8208, op_fs_write_bstring);
     // 0x8209 - int   fs_read_byte(int id)
+    interpreterRegisterOpcode(0x8209, op_fs_read_byte);
     // 0x820a - int   fs_read_short(int id)
+    interpreterRegisterOpcode(0x820a, op_fs_read_short);
     // 0x820b - int   fs_read_int(int id)
+    interpreterRegisterOpcode(0x820b, op_fs_read_int);
     // 0x820c - float fs_read_float(int id)
+    interpreterRegisterOpcode(0x820c, op_fs_read_float);
     // 0x81ff - void  fs_delete(int id)
     interpreterRegisterOpcode(0x81ff, op_fs_delete);
     // 0x8200 - int   fs_size(int id)
+    interpreterRegisterOpcode(0x8200, op_fs_size);
     // 0x8201 - int   fs_pos(int id)
+    interpreterRegisterOpcode(0x8201, op_fs_pos);
     // 0x8202 - void  fs_seek(int id, int pos)
+    interpreterRegisterOpcode(0x8202, op_fs_seek);
     // 0x8203 - void  fs_resize(int id, int size)
+    interpreterRegisterOpcode(0x8203, op_fs_resize);
 
     // 0x8204 - int  get_proto_data(int pid, int offset)
     interpreterRegisterOpcode(0x8204, op_get_proto_data);
