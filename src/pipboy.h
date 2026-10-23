@@ -75,6 +75,8 @@ struct PipboyQuestLocation {
 
 // Quests shown now (global variable thresholds), by location.
 std::vector<PipboyQuestLocation> pipboyGetQuests();
+struct NpcBrainStory;
+void pipboyFillStoryQuests(NpcBrainStory* story);
 
 struct PipboyHolodisk {
     int index;

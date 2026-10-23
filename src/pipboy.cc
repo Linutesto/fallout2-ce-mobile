@@ -1,4 +1,6 @@
 #include "pipboy.h"
+#include "npc_brain.h"
+#include "mui_screens.h"
 
 #include <algorithm>
 #include <assert.h>
@@ -619,7 +621,7 @@ int pipboyOpen(int intent)
 
         // CE: Desktop access to the same touch-friendly journal.
         if (keyCode == KEY_UPPERCASE_J || keyCode == KEY_LOWERCASE_J) {
-            pipboyOpenMobile(PIPBOY_OPEN_INTENT_UNSPECIFIED);
+            muiPipboyScreenRun(false);
         } else if (keyCode == KEY_F12) {
             takeScreenshot();
         } else if (keyCode >= 500 && keyCode <= 504) {
@@ -3153,6 +3155,22 @@ const char* pipboyGetHoliday()
     }
 
     return nullptr;
+}
+
+// CE: The dialogue needs the Pip-Boy's quest data while its window is closed.
+// Load only its quest tables, then copy strings before freeing the messages.
+void pipboyFillStoryQuests(NpcBrainStory* story)
+{
+    bool ownTables = gQuestDescriptions == nullptr;
+    if (ownTables && questInit() == -1) return;
+    auto locations = pipboyGetQuests();
+    for (auto loc = locations.rbegin(); loc != locations.rend() && story->quests.size() < 40; ++loc) {
+        for (const auto& q : loc->quests) {
+            if (story->quests.size() == 40) break;
+            story->quests.push_back({ loc->name, q.text, q.completed ? "done" : "active" });
+        }
+    }
+    if (ownTables) questFree();
 }
 
 std::vector<PipboyQuestLocation> pipboyGetQuests()

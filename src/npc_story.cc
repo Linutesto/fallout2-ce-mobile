@@ -197,13 +197,7 @@ void npcStoryFillRequest(Object* npc, NpcBrainRequest* request)
     request->allowedEffects = allowed(npc);
     auto& story = request->story;
     // CE: The Pip-Boy owns display/completion thresholds, including conversions.
-    auto quests = pipboyGetQuests();
-    for (auto loc = quests.rbegin(); loc != quests.rend() && story.quests.size() < 40; ++loc) {
-        for (const auto& q : loc->quests) {
-            if (story.quests.size() == 40) break;
-            story.quests.push_back({ loc->name, q.text, q.completed ? "done" : "active" });
-        }
-    }
+    pipboyFillStoryQuests(&story);
     characterEditorFillStory(&story);
     for (KillType type = KILL_TYPE_FIRST; type < KILL_TYPE_DEFAULT_COUNT; type++) story.killsTotal += killsGetByType(type);
     story.killsMen = killsGetByType(KILL_TYPE_MAN);

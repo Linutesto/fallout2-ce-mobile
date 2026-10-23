@@ -2762,6 +2762,9 @@ static int gameDialogFreeTalk()
     _gdProcessCleanup();
     _gdProcessUpdate();
 
+    // CE: Pending attack_setup-style combat must leave the dialog before it runs.
+    if (scriptsHasPendingRequests()) return -1;
+
     // The engine runs what it allowed: barter is the game's own barter.
     if (intent == "open_barter") {
         gameDialogBarterButtonUpMouseUp(-1, -1);
