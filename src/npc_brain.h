@@ -27,7 +27,65 @@ struct NpcBrainItem {
     int quantity;
 };
 
+// CE: Typed story/effect contract; only the game thread may apply effects.
+struct NpcBrainTimeline {
+    std::string branch;
+    long long head = 0;
+    bool fork = false;
+    bool present = true;
+};
+struct NpcBrainQuest {
+    std::string location, text, state;
+};
+struct NpcBrainTown {
+    std::string name, title;
+    int reputation = 0;
+};
+struct WastelandQuest {
+    std::string id, giver, giverName, title, objective, kind, location;
+    int pid = 0, quantity = 1, rewardCaps = 0, rewardXp = 0;
+    std::string state = "active";
+};
+struct WastelandDiscount {
+    std::string npc;
+    int percent = 0;
+};
+struct WastelandState {
+    std::vector<WastelandDiscount> discounts;
+    std::vector<WastelandQuest> quests;
+    std::vector<std::string> revealed;
+    int questCounter = 0;
+};
+struct NpcBrainStory {
+    std::vector<NpcBrainQuest> quests;
+    std::vector<NpcBrainTown> towns;
+    std::string karmaTitle;
+    std::vector<std::string> perksTitles, party, knownLocations;
+    int killsTotal = 0, killsMen = 0, killsWomen = 0, killsChildren = 0;
+    unsigned int gameTicks = 0;
+    int npcTeam = 0;
+    std::vector<WastelandQuest> wastelandQuests;
+    int discountPercent = 0;
+};
+struct NpcBrainAllowedEffects {
+    int maxDiscount = 0;
+    std::vector<NpcBrainItem> gifts; // quantity is max_qty
+    std::vector<std::string> revealLocations;
+    bool sideQuest = false;
+    int maxCaps = 200, maxXp = 100;
+    std::vector<NpcBrainItem> fetchItems;
+    std::vector<std::string> visitLocations, completeQuests;
+    bool turnHostile = false;
+};
+struct NpcBrainEffect {
+    std::string type, name, title, objective, kind, location, id;
+    int percent = 0, pid = 0, quantity = 1, rewardCaps = 0, rewardXp = 0;
+};
+
 struct NpcBrainRequest {
+    NpcBrainStory story;
+    NpcBrainTimeline timeline;
+    NpcBrainAllowedEffects allowedEffects;
     std::string campaign;
     std::string contentId = "fallout2";
     std::string npcInstance;
@@ -61,6 +119,8 @@ enum class NpcBrainStatus {
 };
 
 struct NpcBrainResponse {
+    NpcBrainTimeline timeline { "", 0, false, false };
+    std::vector<NpcBrainEffect> effects;
     std::string npcId;
     std::string say;
     std::string mood;
@@ -68,6 +128,12 @@ struct NpcBrainResponse {
     std::string source;
     std::string error;
 };
+
+// CE: Save JSON is bounded and validated before replacing live state.
+std::string wastelandStateToJson(const WastelandState& state);
+bool wastelandStateFromJson(const std::string& json, WastelandState* state);
+std::string npcBrainTimelineToJson(const NpcBrainTimeline& timeline);
+bool npcBrainTimelineFromJson(const std::string& json, NpcBrainTimeline* timeline);
 
 // One talk request running on its own thread. Safe to drop before it ends.
 class NpcBrainCall {
