@@ -81,6 +81,13 @@ public class ImportActivity extends Activity {
         });
 
         applyFont(findViewById(R.id.import_panel));
+        try {
+            GameProfile.activeName(getExternalFilesDir(null));
+        } catch (IllegalStateException e) {
+            android.widget.Toast.makeText(this, e.getMessage(), android.widget.Toast.LENGTH_LONG).show();
+            finish();
+            return;
+        }
         replacing = GameImport.isInstalled(getExternalFilesDir(null));
         mode = getIntent().getStringExtra(MODE);
         if (MODE_SAVES_EXPORT.equals(mode)) {
@@ -223,7 +230,7 @@ public class ImportActivity extends Activity {
                     });
                 openSource = source;
                 if (MODE_SAVES_IMPORT.equals(mode)) {
-                    GameSaves.Found saves = GameSaves.find(source, getExternalFilesDir(null), currentComposition(), currentCharset(), SaveComposition::compare);
+                    GameSaves.Found saves = GameSaves.find(source, savesDirectory(), currentComposition(), currentCharset(), SaveComposition::compare);
                     GameImport.Source chosen = source;
                     if (saves == null) {
                         closeQuietly(source);
@@ -496,7 +503,7 @@ public class ImportActivity extends Activity {
     // What the game is made of now (written by the game, src/loadsave.cc).
     private String currentComposition() {
         try {
-            return new String(GameSaves.readAll(new File(getFilesDir(), GameSaves.COMPOSITION)), java.nio.charset.StandardCharsets.UTF_8).trim();
+            return new String(GameSaves.readAll(new File(profileDataDirectory(), GameSaves.COMPOSITION)), java.nio.charset.StandardCharsets.UTF_8).trim();
         } catch (IOException e) {
             return "";
         }
@@ -505,14 +512,22 @@ public class ImportActivity extends Activity {
     // Its texts' code page (written by the game, src/loadsave.cc).
     private String currentCharset() {
         try {
-            return new String(GameSaves.readAll(new File(getFilesDir(), GameSaves.CHARSET)), java.nio.charset.StandardCharsets.UTF_8).trim();
+            return new String(GameSaves.readAll(new File(profileDataDirectory(), GameSaves.CHARSET)), java.nio.charset.StandardCharsets.UTF_8).trim();
         } catch (IOException e) {
             return "";
         }
     }
 
+    private File savesDirectory() {
+        return GameProfile.gameDirectory(getExternalFilesDir(null));
+    }
+
+    private File profileDataDirectory() {
+        return GameProfile.privateDirectory(getExternalFilesDir(null), getFilesDir());
+    }
+
     private File recordsFile() {
-        return new File(getFilesDir(), GameSaves.RECORDS);
+        return new File(profileDataDirectory(), GameSaves.RECORDS);
     }
 
     // The saves found: a summary, the list (newest first, marks of
@@ -582,7 +597,7 @@ public class ImportActivity extends Activity {
 
     // Replacing all: the saves there go - said first, exporting them offered.
     private void confirmReplaceSaves(GameImport.Source source, GameSaves.Found found) {
-        int current = GameSaves.installedSaves(getExternalFilesDir(null)).size();
+        int current = GameSaves.installedSaves(savesDirectory()).size();
         if (current == 0) {
             importSaves(source, found, true);
             return;
@@ -594,7 +609,7 @@ public class ImportActivity extends Activity {
     }
 
     private void importSaves(GameImport.Source source, GameSaves.Found found, boolean replaceAll) {
-        File game = getExternalFilesDir(null);
+        File game = savesDirectory();
         GameSaves.Plan plan;
         try {
             plan = GameSaves.plan(found, game, replaceAll);
@@ -645,7 +660,7 @@ public class ImportActivity extends Activity {
     // goes on after it (or back to the game).
     private void startExport(Runnable after) {
         afterExport = after;
-        if (GameSaves.installedSaves(getExternalFilesDir(null)).isEmpty()) {
+        if (GameSaves.installedSaves(savesDirectory()).isEmpty()) {
             busy = true;
             onBack = null;
             show(getString(R.string.saves_export_none), null, null, null, null, null);
@@ -674,7 +689,7 @@ public class ImportActivity extends Activity {
                     if (out == null) {
                         throw new IOException("can't write " + uri);
                     }
-                    count = GameSaves.export(getExternalFilesDir(null), recordsFile(), currentComposition(), out, (done, total) -> runOnUiThread(() -> {
+                    count = GameSaves.export(savesDirectory(), recordsFile(), currentComposition(), out, (done, total) -> runOnUiThread(() -> {
                         progress.setIndeterminate(false);
                         progress.setFraction(total > 0 ? (float) done / total : 0.0f);
                     }));

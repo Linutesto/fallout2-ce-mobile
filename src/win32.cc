@@ -1,6 +1,8 @@
 #include "win32.h"
 
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 
 #include <SDL.h>
 
@@ -101,6 +103,33 @@ int main(int argc, char* argv[])
     SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
     chdir(SDL_AndroidGetExternalStoragePath());
+    // Each conversion/mod setup owns its config, mods and saves. The original
+    // imported game remains at the storage root; profiles share its big DATs.
+    if (FILE* profile = fopen("active-profile.txt", "r")) {
+        char name[68] = {};
+        bool valid = fgets(name, sizeof(name), profile) != nullptr;
+        valid = valid && fgetc(profile) == EOF;
+        fclose(profile);
+        size_t length = strlen(name);
+        if (length && name[length - 1] == '\n') name[--length] = '\0';
+        if (length && name[length - 1] == '\r') name[--length] = '\0';
+        valid = valid && length > 0 && length <= 64;
+        for (const char* p = name; *p; ++p) {
+            valid = valid && ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z')
+                || (*p >= '0' && *p <= '9') || *p == '-' || *p == '_');
+        }
+        if (valid) {
+            char path[80];
+            snprintf(path, sizeof(path), "profiles/%s", name);
+            if (chdir(path) != 0) return EXIT_FAILURE;
+            FILE* config = fopen("fallout2.cfg", "r");
+            if (!config) return EXIT_FAILURE;
+            fclose(config);
+            SDL_setenv("FALLOUT_PROFILE", name, 1);
+        } else {
+            return EXIT_FAILURE;
+        }
+    }
 #endif
 
     if (SDL_Init(SDL_INIT_AUDIO | SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0) {

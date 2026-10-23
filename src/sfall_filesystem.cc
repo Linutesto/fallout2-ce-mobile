@@ -25,6 +25,18 @@ typedef struct SfallFileSystemAlias {
 
 static std::vector<SfallFileSystemAlias> aliases;
 
+static bool canAllocate(int size, int replacing = -1)
+{
+    if (size < 0 || size > 10 * 1024 * 1024) return false;
+    size_t total = size;
+    bool freeSlot = aliases.size() < 4096;
+    for (size_t i = 0; i < aliases.size(); ++i) {
+        if (!aliases[i].active) freeSlot = true;
+        if (aliases[i].active && static_cast<int>(i) != replacing) total += aliases[i].buffer.size();
+    }
+    return total <= 64 * 1024 * 1024 && (replacing >= 0 || freeSlot);
+}
+
 static std::string normalizePath(const char* path)
 {
     std::string normalized = path != nullptr ? path : "";
@@ -61,7 +73,7 @@ static int findAliasIndex(const char* path)
 
 int sfallFileSystemCopy(const char* path, const char* source)
 {
-    if (path == nullptr || path[0] == '\0' || source == nullptr || source[0] == '\0') {
+    if (path == nullptr || path[0] == '\0' || strlen(path) > 1024 || source == nullptr || source[0] == '\0') {
         return -1;
     }
 
@@ -74,7 +86,7 @@ int sfallFileSystemCopy(const char* path, const char* source)
     if (dbGetFileSize(source, &fileSize) != 0) {
         return -1;
     }
-    if (fileSize < 0 || fileSize > 10 * 1024 * 1024) return -1;
+    if (!canAllocate(fileSize)) return -1;
     std::vector<unsigned char> bytes(fileSize);
     if (fileSize > 0 && dbGetFileContents(source, bytes.data()) != 0) return -1;
 
@@ -154,9 +166,10 @@ static SfallFileSystemAlias* entry(int id)
 
 int sfallFileSystemCreate(const char* path, int size)
 {
-    if (path == nullptr || !*path || size < 0 || size > 10 * 1024 * 1024) return -1;
+    if (path == nullptr || !*path || strlen(path) > 1024) return -1;
     int old = findAliasIndex(path);
     if (old != -1) return old;
+    if (!canAllocate(size)) return -1;
     SfallFileSystemAlias value;
     value.active = true;
     value.path = path;
@@ -177,7 +190,7 @@ void sfallFileSystemResize(int id, int size)
     auto* e = entry(id);
     if (!e) return;
     if (size == -1) { e->saved = true; return; }
-    if (e->buffer.resize(size)) artCacheFlush();
+    if (canAllocate(size, id) && e->buffer.resize(size)) artCacheFlush();
 }
 void sfallFileSystemWrite(int id, unsigned int value, int width)
 {
@@ -220,6 +233,13 @@ File* sfallFileSystemOpen(const char* path)
 // since scripts may retain virtual file handles in saved global variables.
 bool sfallFileSystemSave(File* stream)
 {
+    if (aliases.size() > 4096) return false;
+    size_t total = 0;
+    for (const auto& e : aliases) {
+        if (!e.active || !e.saved) continue;
+        total += e.buffer.size();
+        if (e.path.empty() || e.path.size() > 1024 || total > 64 * 1024 * 1024) return false;
+    }
     if (fileWriteInt32(stream, 0x56465331) == -1 || fileWriteInt32(stream, aliases.size()) == -1) return false;
     for (const auto& e : aliases) {
         bool keep = e.active && e.saved;

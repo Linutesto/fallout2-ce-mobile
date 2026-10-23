@@ -2277,7 +2277,7 @@ static void op_fs_read_int(Program* program) {
     programStackPushInteger(program, static_cast<int>(value));
 }
 static void op_fs_write_float(Program* program) {
-    float value = programStackPopFloat(program); unsigned int bits; memcpy(&bits, &value, 4);
+    float value = programStackPopValue(program).asFloat(); unsigned int bits; memcpy(&bits, &value, 4);
     int id = programStackPopInteger(program); sfallFileSystemWrite(id, bits, 4);
 }
 static void op_fs_read_float(Program* program) {

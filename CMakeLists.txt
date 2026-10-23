@@ -946,4 +946,6 @@ if(UNIX AND NOT ANDROID AND NOT IOS AND NOT CMAKE_SYSTEM_NAME MATCHES "Emscripte
 
     ce_add_test(save_catalog_test "src/save_catalog.cc" "src/save_records.cc" "src/save_storage.cc")
     ce_add_test(sound_tempo_test "src/sound_tempo.cc")
+    ce_add_test(sfall_virtual_buffer_test)
+    ce_add_test(sfall_filesystem_test "src/sfall_filesystem.cc")
 endif()

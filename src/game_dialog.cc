@@ -2558,7 +2558,7 @@ static void gameDialogFreeTalkFillRequest(NpcBrainRequest* request, const std::s
     if (configGetString(&gGameConfig, "ai", "content_id", &contentId) && contentId != nullptr && contentId[0] != '\0') {
         request->contentId = contentId;
     }
-    request->npcInstance = std::to_string(speaker->id);
+    request->npcInstance = std::to_string(scriptsSetUniqueObjectId(speaker));
     request->npcPid = speaker->pid;
     request->npcName = critterGetName(speaker);
     request->map = gMapHeader.name;

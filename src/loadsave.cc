@@ -539,7 +539,13 @@ static std::string portDataPath(const char* name)
 #ifdef __ANDROID__
     const char* internal = SDL_AndroidGetInternalStoragePath();
     if (internal != nullptr) {
-        return std::string(internal) + "/" + name;
+        std::string directory = internal;
+        const char* profile = SDL_getenv("FALLOUT_PROFILE");
+        if (profile != nullptr && *profile) {
+            directory += std::string("/profiles/") + profile;
+            compat_mkdir_recursive(directory.c_str());
+        }
+        return directory + "/" + name;
     }
 #endif
     return std::string("ce-") + name;

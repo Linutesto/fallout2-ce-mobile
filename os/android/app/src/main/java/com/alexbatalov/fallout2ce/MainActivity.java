@@ -26,6 +26,16 @@ public class MainActivity extends SDLActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         final File externalFilesDir = getExternalFilesDir(null);
+        final File savesDirectory;
+        try {
+            savesDirectory = GameProfile.gameDirectory(externalFilesDir);
+        } catch (IllegalStateException e) {
+            noExit = true;
+            super.onCreate(savedInstanceState);
+            android.widget.Toast.makeText(this, e.getMessage(), android.widget.Toast.LENGTH_LONG).show();
+            finish();
+            return;
+        }
         // A replacement of the game's files cut short (the app died while
         // moving them in): finished before the game reads them.
         if (externalFilesDir != null && GameFiles.isCommitPending(externalFilesDir)) {
@@ -36,9 +46,9 @@ public class MainActivity extends SDLActivity {
             }
         }
         // The same for an import of saves.
-        if (externalFilesDir != null && GameSaves.isCommitPending(externalFilesDir)) {
+        if (externalFilesDir != null && GameSaves.isCommitPending(savesDirectory)) {
             try {
-                GameSaves.finish(externalFilesDir);
+                GameSaves.finish(savesDirectory);
             } catch (IOException e) {
                 e.printStackTrace();
             }
