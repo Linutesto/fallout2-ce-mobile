@@ -8,6 +8,9 @@
 #include <vector>
 
 #include "art.h"
+#include "graphics.h"
+#include "debug.h"
+#include "dev_autotest.h"
 #include "map.h"
 #include "map_edge.h"
 #include "object.h"
@@ -32,6 +35,8 @@ enum WorldViewFilter {
     WORLD_VIEW_FILTER_NEAREST = 0,
     WORLD_VIEW_FILTER_LINEAR = 1,
     WORLD_VIEW_FILTER_SHARP = 2,
+    WORLD_VIEW_FILTER_MMPX = 3,
+    WORLD_VIEW_FILTER_SCALE3X = 4,
 };
 
 static void worldViewPanByWorld(float dx, float dy);
@@ -76,6 +81,11 @@ static bool gComposeValid = false;
 static unsigned int gComposeVersion = 0;
 static SDL_Rect gComposeSource;
 static int gComposeFactor = 0;
+static SDL_Texture* gMagnifyTexture = nullptr;
+static int gMagnifyWidth = 0;
+static int gMagnifyHeight = 0;
+static std::vector<Uint32> gMagnifySource;
+static std::vector<Uint32> gMagnifyPixels;
 
 // Part of the buffer drawn and up to date (empty - nothing), see
 // `worldViewClipRender`.
@@ -584,10 +594,7 @@ static void worldViewUpdatePalette()
         return;
     }
 
-    SDL_Color* colors = gSdlSurface->format->palette->colors;
-    for (int index = 0; index < 256; index++) {
-        gPalette[index] = 0xFF000000 | (colors[index].r << 16) | (colors[index].g << 8) | colors[index].b;
-    }
+    memcpy(gPalette, screenGetPalette(), sizeof(gPalette));
 }
 
 void worldViewRender(SDL_Renderer* renderer)
@@ -610,6 +617,52 @@ void worldViewRender(SDL_Renderer* renderer)
     perfMonitorSpan(PerfSpan::WorldDraw, drawStart);
 }
 
+// Compose from the same indexed world buffer as the ring tiles, without a
+// GPU readback. Only called when source/scale/tile version changes. Sampling
+// across tile boundaries here avoids seams; the view has a 3px guard band.
+static bool worldViewMagnify(SDL_Renderer* renderer, const SDL_Rect& source, int factor)
+{
+    int magnifier = gFilter == WORLD_VIEW_FILTER_MMPX ? 2 : 3;
+    int width = source.w * magnifier;
+    int height = source.h * magnifier;
+    if (gMagnifyTexture == nullptr || gMagnifyWidth != width || gMagnifyHeight != height) {
+        if (gMagnifyTexture != nullptr) SDL_DestroyTexture(gMagnifyTexture);
+        gMagnifyTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
+        gMagnifyWidth = width;
+        gMagnifyHeight = height;
+        if (gMagnifyTexture == nullptr) {
+            debugPrint("world magnifier: %s; using sharp prescale\n", SDL_GetError());
+            return false;
+        }
+        SDL_SetTextureBlendMode(gMagnifyTexture, SDL_BLENDMODE_NONE);
+        SDL_SetTextureScaleMode(gMagnifyTexture, SDL_ScaleModeNearest);
+    }
+    Uint64 start = SDL_GetPerformanceCounter();
+    gMagnifySource.resize(static_cast<size_t>(source.w) * source.h);
+    gMagnifyPixels.resize(static_cast<size_t>(width) * height);
+    const Uint32* palette = screenGetPalette();
+    for (int y = 0; y < source.h; y++) {
+        const unsigned char* row = gWorldBuffer + (source.y + y) * gWorldWidth + source.x;
+        for (int x = 0; x < source.w; x++) {
+            gMagnifySource[y * source.w + x] = palette[row[x]];
+        }
+    }
+    if (magnifier == 2) {
+        graphicsMmpx(gMagnifySource.data(), source.w, source.h, gMagnifyPixels.data());
+    } else {
+        graphicsScale3x(gMagnifySource.data(), source.w, source.h, gMagnifyPixels.data());
+    }
+    double cpuMs = (SDL_GetPerformanceCounter() - start) * 1000.0 / SDL_GetPerformanceFrequency();
+    if (SDL_UpdateTexture(gMagnifyTexture, nullptr, gMagnifyPixels.data(), width * sizeof(Uint32)) != 0) {
+        return false;
+    }
+    SDL_Rect dest = { 0, 0, source.w * factor, source.h * factor };
+    SDL_RenderCopy(renderer, gMagnifyTexture, nullptr, &dest);
+    double ms = (SDL_GetPerformanceCounter() - start) * 1000.0 / SDL_GetPerformanceFrequency();
+    devAutotestNote("  magnifier filter=%d source=%dx%d prescale=%d cpu_ms=%.4f cpu_upload_submit_ms=%.4f\n", gFilter, source.w, source.h, factor, cpuMs, ms);
+    return true;
+}
+
 // Draws the visible part of the world texture (see `worldViewRender`).
 static void worldViewDraw(SDL_Renderer* renderer)
 {
@@ -618,12 +671,13 @@ static void worldViewDraw(SDL_Renderer* renderer)
     float halfViewWidth = gViewWidth / 2;
     float halfViewHeight = gViewHeight / 2;
 
-    // Integer source rect covering the visible area (with a 1px guard band
+    int guard = gFilter >= WORLD_VIEW_FILTER_MMPX ? 3 : 1;
+    // Integer source rect covering the visible area (with a guard band
     // for filtering), and matching fractional destination rect.
-    int left = std::max(static_cast<int>(floorf(centerX - halfViewWidth / gZoom)) - 1, 0);
-    int top = std::max(static_cast<int>(floorf(centerY - halfViewHeight / gZoom)) - 1, 0);
-    int right = std::min(static_cast<int>(ceilf(centerX + (gViewWidth - halfViewWidth) / gZoom)) + 1, gWorldWidth);
-    int bottom = std::min(static_cast<int>(ceilf(centerY + (gViewHeight - halfViewHeight) / gZoom)) + 1, gWorldHeight);
+    int left = std::max(static_cast<int>(floorf(centerX - halfViewWidth / gZoom)) - guard, 0);
+    int top = std::max(static_cast<int>(floorf(centerY - halfViewHeight / gZoom)) - guard, 0);
+    int right = std::min(static_cast<int>(ceilf(centerX + (gViewWidth - halfViewWidth) / gZoom)) + guard, gWorldWidth);
+    int bottom = std::min(static_cast<int>(ceilf(centerY + (gViewHeight - halfViewHeight) / gZoom)) + guard, gWorldHeight);
     if (left >= right || top >= bottom) {
         return;
     }
@@ -655,6 +709,12 @@ static void worldViewDraw(SDL_Renderer* renderer)
     case WORLD_VIEW_FILTER_NEAREST:
         scaleMode = SDL_ScaleModeNearest;
         break;
+    case WORLD_VIEW_FILTER_MMPX:
+    case WORLD_VIEW_FILTER_SCALE3X: {
+        int magnifier = gFilter == WORLD_VIEW_FILTER_MMPX ? 2 : 3;
+        factor = magnifier * std::max(static_cast<int>(floorf(scale / magnifier + 0.001f)), 1);
+        break;
+    }
     case WORLD_VIEW_FILTER_SHARP:
         factor = std::max(static_cast<int>(floorf(scale + 0.001f)), 1);
         if (fabsf(scale - factor) < 0.001f) {
@@ -665,6 +725,10 @@ static void worldViewDraw(SDL_Renderer* renderer)
         break;
     }
 
+    SDL_RendererInfo info;
+    if (SDL_GetRendererInfo(renderer, &info) == 0 && info.max_texture_width > 0 && info.max_texture_height > 0) {
+        factor = std::max(1, std::min({ factor, info.max_texture_width / srcRect.w, info.max_texture_height / srcRect.h }));
+    }
     int width = srcRect.w * factor;
     int height = srcRect.h * factor;
     if (gComposeTexture == nullptr || gComposeTextureWidth < width || gComposeTextureHeight < height) {
@@ -689,7 +753,9 @@ static void worldViewDraw(SDL_Renderer* renderer)
         if (SDL_SetRenderTarget(renderer, gComposeTexture) != 0) {
             return;
         }
-        worldTextureDraw(renderer, srcRect, factor);
+        if (gFilter < WORLD_VIEW_FILTER_MMPX || !worldViewMagnify(renderer, srcRect, factor)) {
+            worldTextureDraw(renderer, srcRect, factor);
+        }
         SDL_SetRenderTarget(renderer, nullptr);
 
         gComposeValid = true;
@@ -715,11 +781,11 @@ static void worldViewDraw(SDL_Renderer* renderer)
 
 void worldViewSetFilter(int filter)
 {
-    gFilter = std::clamp(filter, 0, 2);
+    gFilter = std::clamp(filter, 0, 4);
     gComposeValid = false;
 }
 
-bool worldViewCaptureView(std::vector<unsigned char>* rgba, int* width, int* height, int maxWidth)
+bool worldViewCaptureView(std::vector<unsigned char>* rgba, int* width, int* height, int maxWidth, int preset)
 {
     if (!gWorldViewEnabled || gWorldBuffer == nullptr || gSdlSurface == nullptr || gSdlSurface->format->palette == nullptr) {
         return false;
@@ -741,15 +807,19 @@ bool worldViewCaptureView(std::vector<unsigned char>* rgba, int* width, int* hei
     *height = std::max(sourceHeight * *width / sourceWidth, 1);
 
     const SDL_Color* colors = gSdlSurface->format->palette->colors;
+    Uint32 previewPalette[256];
+    for (int i = 0; i < 256; i++) {
+        previewPalette[i] = graphicsGradeColor(0xFF000000 | (colors[i].r << 16) | (colors[i].g << 8) | colors[i].b, preset);
+    }
     rgba->resize(static_cast<size_t>(*width) * *height * 4);
     for (int y = 0; y < *height; y++) {
         const unsigned char* row = gWorldBuffer + static_cast<size_t>(visible.top + y * sourceHeight / *height) * gWorldWidth + visible.left;
         unsigned char* dest = rgba->data() + static_cast<size_t>(y) * *width * 4;
         for (int x = 0; x < *width; x++) {
-            const SDL_Color& color = colors[row[x * sourceWidth / *width]];
-            dest[x * 4] = color.r;
-            dest[x * 4 + 1] = color.g;
-            dest[x * 4 + 2] = color.b;
+            Uint32 color = previewPalette[row[x * sourceWidth / *width]];
+            dest[x * 4] = (color >> 16) & 255;
+            dest[x * 4 + 1] = (color >> 8) & 255;
+            dest[x * 4 + 2] = color & 255;
             dest[x * 4 + 3] = 255;
         }
     }
@@ -852,6 +922,13 @@ static void worldViewRenderOverlay(SDL_Renderer* renderer, float centerX, float 
 
 void worldViewResetRenderer()
 {
+    if (gMagnifyTexture != nullptr) {
+        SDL_DestroyTexture(gMagnifyTexture);
+        gMagnifyTexture = nullptr;
+    }
+    gMagnifyWidth = gMagnifyHeight = 0;
+    gMagnifySource.clear();
+    gMagnifyPixels.clear();
     if (gOverlayTexture != nullptr) {
         SDL_DestroyTexture(gOverlayTexture);
         gOverlayTexture = nullptr;

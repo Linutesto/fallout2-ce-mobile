@@ -43,6 +43,10 @@ void directDrawFree();
 void directDrawSetPaletteInRange(unsigned char* palette, int start, int count);
 void directDrawSetPalette(unsigned char* palette);
 unsigned char* directDrawGetPalette();
+// Display palette only; the game's 6-bit palette remains untouched.
+const Uint32* screenGetPalette();
+void screenSetColorPreset(int preset);
+void screenSetHighRefresh(bool enabled);
 void _GNW95_ShowRect(unsigned char* src, int src_pitch, int unused, int src_x, int src_y, int src_width, int src_height, int dest_x, int dest_y);
 void _GNW95_zero_vid_mem();
 

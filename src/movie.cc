@@ -121,16 +121,12 @@ static void movieDirectOverlayUpload(unsigned char* pixels, int srcWidth, int sr
         movieDirectOverlay.uploadBuffer.resize(pixelCount);
     }
 
-    SDL_Color* colors = gSdlSurface->format->palette->colors;
+    const Uint32* colors = screenGetPalette();
     for (int y = 0; y < height; y++) {
         const unsigned char* srcRow = pixels + y * srcWidth;
         uint32_t* dstRow = movieDirectOverlay.uploadBuffer.data() + y * width;
         for (int x = 0; x < width; x++) {
-            SDL_Color color = colors[srcRow[x]];
-            dstRow[x] = (static_cast<uint32_t>(color.a) << 24)
-                | (static_cast<uint32_t>(color.r) << 16)
-                | (static_cast<uint32_t>(color.g) << 8)
-                | static_cast<uint32_t>(color.b);
+            dstRow[x] = colors[srcRow[x]];
         }
     }
 

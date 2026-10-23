@@ -12,6 +12,8 @@
 #include "dev_autotest.h"
 #include "fps_limiter.h"
 #include "game.h"
+#include "graphics.h"
+#include "settings.h"
 #include "game_mouse.h"
 #include "game_sound.h"
 #include "input.h"
@@ -78,12 +80,17 @@ namespace {
     // opaque (index 0 too).
     void convertThumbnail(const std::vector<unsigned char>& indexed, std::vector<unsigned char>* rgba)
     {
+        Uint32 palette[256];
+        int preset = graphicsColorPresetIndex(settings.graphics.color_preset.c_str());
+        for (int i = 0; i < 256; i++) {
+            palette[i] = graphicsGradeColor(0xFF000000 | (_cmap[i*3] << 18) | (_cmap[i*3+1] << 10) | (_cmap[i*3+2] << 2), preset);
+        }
         rgba->resize(indexed.size() * 4);
         for (size_t index = 0; index < indexed.size(); index++) {
-            int color = indexed[index] * 3;
-            (*rgba)[index * 4] = _cmap[color] << 2;
-            (*rgba)[index * 4 + 1] = _cmap[color + 1] << 2;
-            (*rgba)[index * 4 + 2] = _cmap[color + 2] << 2;
+            Uint32 color = palette[indexed[index]];
+            (*rgba)[index * 4] = (color >> 16) & 255;
+            (*rgba)[index * 4 + 1] = (color >> 8) & 255;
+            (*rgba)[index * 4 + 2] = color & 255;
             (*rgba)[index * 4 + 3] = 255;
         }
     }

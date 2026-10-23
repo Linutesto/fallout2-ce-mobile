@@ -3,6 +3,7 @@
 #include "audio_channels.h"
 #include "debug.h"
 #include "game_config.h"
+#include "graphics.h"
 #include "platform_compat.h"
 #include "sound.h"
 #include "touch.h"
@@ -409,12 +410,19 @@ void initSettingsRegistry(bool isMapper)
     SETTING(tactical_view);
 #undef SECT
 
+#define SECT graphics
+    SETTING_P(color_preset, [](std::string& value, const char*, const char*) {
+        value = graphicsColorPresetName(graphicsColorPresetIndex(value.c_str()));
+    });
+    SETTING(high_refresh);
+#undef SECT
+
 #define SECT world_view
     SETTING(enabled);
     SETTING_P(zoom_min, clamp(0.25, 1.0));
     SETTING_P(zoom_max, clamp(1.0, 8.0));
     SETTING_P(zoom, clamp(0.25, 8.0));
-    SETTING_P(filter, clamp(0, 2));
+    SETTING_P(filter, clamp(0, 4));
 #undef SECT
 
     if (isMapper) {

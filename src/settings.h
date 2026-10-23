@@ -317,6 +317,11 @@ struct EnhancementSettings {
     bool tactical_view = true;
 };
 
+struct GraphicsSettings {
+    std::string color_preset = "original";
+    bool high_refresh = true;
+};
+
 // CE: Zoomable map view, see world_view.h.
 struct WorldViewSettings {
     bool enabled = true;
@@ -324,7 +329,7 @@ struct WorldViewSettings {
     double zoom = 1.0;
     double zoom_min = 0.5;
     double zoom_max = 4.0;
-    // 0 - nearest, 1 - bilinear, 2 - sharp bilinear.
+    // 0 - nearest, 1 - bilinear, 2 - sharp bilinear, 3 - MMPX, 4 - Scale3x.
     int filter = 2;
 };
 
@@ -380,6 +385,7 @@ struct Settings {
     CombatAiSettings combat_ai;
     QolSettings qol;
     EnhancementSettings enhancements;
+    GraphicsSettings graphics;
     WorldViewSettings world_view;
     TouchSettings touch;
     MapperSettings mapper;

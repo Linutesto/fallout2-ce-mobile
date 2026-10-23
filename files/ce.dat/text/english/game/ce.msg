@@ -292,3 +292,17 @@
 # The message when a party member or another critter cannot pick up an item
 # (the player's message is 905 in proto.msg).
 {1000}{}{%s cannot pick up the item.}
+
+# Graphics settings (English fallbacks are also supplied in the mobile UI).
+{380}{}{Graphics}
+{381}{}{Colour preset}
+{382}{}{Original}
+{383}{}{OLED}
+{384}{}{Warm}
+{385}{}{Cold}
+{386}{}{Night}
+{387}{}{MMPX}
+{388}{}{Scale3x}
+{389}{}{High refresh}
+{390}{}{Use the display rate for touch and UI; game speed stays the same}
+{391}{}{MMPX / Scale3x smooth pixel edges; slower when zoomed out}

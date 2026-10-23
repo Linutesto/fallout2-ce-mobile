@@ -1,6 +1,13 @@
 package com.alexbatalov.fallout2ce;
 
 import android.content.Intent;
+import android.content.Context;
+import android.hardware.display.DisplayManager;
+import android.view.Display;
+import android.view.Surface;
+import android.view.SurfaceHolder;
+import android.view.WindowManager;
+import org.libsdl.app.SDLSurface;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
@@ -22,6 +29,93 @@ import java.nio.charset.StandardCharsets;
 
 public class MainActivity extends SDLActivity {
     private boolean noExit = false;
+    private boolean highRefresh = true;
+    private volatile float currentRefreshRate = 60.0f;
+    private DisplayManager displayManager;
+    private final DisplayManager.DisplayListener refreshListener = new DisplayManager.DisplayListener() {
+        @Override public void onDisplayAdded(int id) { }
+        @Override public void onDisplayRemoved(int id) { }
+        @Override public void onDisplayChanged(int id) { updateCurrentRefreshRate(); }
+    };
+
+    @Override
+    protected SDLSurface createSDLSurface(Context context) {
+        return new SDLSurface(context) {
+            @Override public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+                super.surfaceChanged(holder, format, width, height);
+                applyRefreshRate();
+            }
+        };
+    }
+
+    // Called by svga.cc after reading fallout2.cfg and when Preferences applies.
+    public void setHighRefresh(boolean enabled) {
+        runOnUiThread(() -> {
+            highRefresh = enabled;
+            applyRefreshRate();
+        });
+    }
+
+    public float getRefreshRate() { return currentRefreshRate; }
+
+    private void updateCurrentRefreshRate() {
+        Display display = getWindowManager().getDefaultDisplay();
+        currentRefreshRate = display != null ? display.getRefreshRate() : 60.0f;
+    }
+
+    private void applyRefreshRate() {
+        Display display = getWindowManager().getDefaultDisplay();
+        if (display == null) return;
+        Display.Mode current = display.getMode();
+        Display.Mode[] modes = display.getSupportedModes();
+        float[] rates = new float[modes.length];
+        for (int i = 0; i < modes.length; i++) {
+            // Never change the resolution to obtain a faster mode.
+            if (modes[i].getPhysicalWidth() == current.getPhysicalWidth()
+                    && modes[i].getPhysicalHeight() == current.getPhysicalHeight()) {
+                rates[i] = modes[i].getRefreshRate();
+            }
+        }
+        float target = RefreshRatePolicy.choose(highRefresh, rates);
+        WindowManager.LayoutParams params = getWindow().getAttributes();
+        params.preferredRefreshRate = target;
+        // pre-30 devices have no Surface.setFrameRate API.
+        params.preferredDisplayModeId = 0;
+        if (Build.VERSION.SDK_INT < 30) {
+            for (Display.Mode mode : modes) {
+                if (mode.getPhysicalWidth() == current.getPhysicalWidth()
+                        && mode.getPhysicalHeight() == current.getPhysicalHeight()
+                        && Math.abs(mode.getRefreshRate() - target) < 0.5f) {
+                    params.preferredDisplayModeId = mode.getModeId();
+                    break;
+                }
+            }
+        }
+        getWindow().setAttributes(params);
+        if (Build.VERSION.SDK_INT >= 30 && mSurface != null) {
+            Surface surface = mSurface.getHolder().getSurface();
+            if (surface.isValid()) {
+                // Games use DEFAULT compatibility, not fixed-rate video.
+                surface.setFrameRate(target, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
+            }
+        }
+        updateCurrentRefreshRate();
+        android.util.Log.i("Wasteland", "Refresh requested=" + target + " actual=" + currentRefreshRate);
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (displayManager == null) {
+            displayManager = (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
+            if (displayManager != null) displayManager.registerDisplayListener(refreshListener, null);
+        }
+        applyRefreshRate();
+    }
+
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (focused) applyRefreshRate();
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -144,6 +238,7 @@ public class MainActivity extends SDLActivity {
 
     @Override
     protected void onDestroy() {
+        if (displayManager != null) displayManager.unregisterDisplayListener(refreshListener);
         super.onDestroy();
 
         if (!noExit) {

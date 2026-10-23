@@ -14,6 +14,8 @@
 #include "dev_autotest.h"
 #include "fps_limiter.h"
 #include "game.h"
+#include "graphics.h"
+#include "settings.h"
 #include "game_sound.h"
 #include "input.h"
 #include "kb.h"
@@ -185,13 +187,18 @@ namespace {
         unsigned char palette[768];
         std::vector<unsigned char> pixels;
         if (gameReadSplash(kCustomSplash, &pixels, palette, &splashWidth, &splashHeight)) {
+            Uint32 displayPalette[256];
+            int preset = graphicsColorPresetIndex(settings.graphics.color_preset.c_str());
+            for (int i = 0; i < 256; i++) {
+                displayPalette[i] = graphicsGradeColor(0xFF000000 | (std::min(palette[i*3]*4, 255) << 16)
+                    | (std::min(palette[i*3+1]*4, 255) << 8) | std::min(palette[i*3+2]*4, 255), preset);
+            }
             splash.resize(pixels.size() * 4);
             for (size_t index = 0; index < pixels.size(); index++) {
-                // Palette is 6 bits per channel.
-                const unsigned char* color = palette + pixels[index] * 3;
-                splash[index * 4] = static_cast<unsigned char>(std::min(color[0] * 4, 255));
-                splash[index * 4 + 1] = static_cast<unsigned char>(std::min(color[1] * 4, 255));
-                splash[index * 4 + 2] = static_cast<unsigned char>(std::min(color[2] * 4, 255));
+                Uint32 color = displayPalette[pixels[index]];
+                splash[index * 4] = (color >> 16) & 255;
+                splash[index * 4 + 1] = (color >> 8) & 255;
+                splash[index * 4 + 2] = color & 255;
                 splash[index * 4 + 3] = 255;
             }
         }

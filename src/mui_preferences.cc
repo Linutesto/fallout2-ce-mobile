@@ -15,6 +15,7 @@
 #include "dev_autotest.h"
 #include "fps_limiter.h"
 #include "game.h"
+#include "graphics.h"
 #include "game_sound.h"
 #include "input.h"
 #include "kb.h"
@@ -136,6 +137,19 @@ namespace {
     constexpr int kTextAboutOpen = 371;
     constexpr int kTextAboutLicenses = 372;
 
+    constexpr int kTextSectionGraphics = 380;
+    constexpr int kTextColorPreset = 381;
+    constexpr int kTextPresetOriginal = 382;
+    constexpr int kTextPresetOled = 383;
+    constexpr int kTextPresetWarm = 384;
+    constexpr int kTextPresetCold = 385;
+    constexpr int kTextPresetNight = 386;
+    constexpr int kTextFilterMmpx = 387;
+    constexpr int kTextFilterScale3x = 388;
+    constexpr int kTextHighRefresh = 389;
+    constexpr int kTextHighRefreshNote = 390;
+    constexpr int kTextFilterNote = 391;
+
     // Where the port's source is (the about section, README).
     constexpr const char* kSourceUrl = "https://github.com/imbaner/fallout2-ce-mobile";
 
@@ -153,6 +167,7 @@ namespace {
         { "XZ Utils (liblzma) - BSD Zero Clause License", "licenses\\xz.txt" },
         { "LodePNG - zlib License", "licenses\\lodepng.txt" },
         { "stb_truetype, stb_vorbis - MIT / Public Domain", "licenses\\stb.txt" },
+        { "MMPX - MIT License", "licenses\\mmpx.txt" },
         { "fpattern", "licenses\\fpattern.txt" },
         { "PT Mono - SIL Open Font License 1.1", "fonts\\OFL.txt" },
     };
@@ -200,6 +215,8 @@ namespace {
         bool saveCompatibility;
         int interfaceSize;
         int mapFilter;
+        int colorPreset;
+        bool highRefresh;
         bool autoOpenDoors;
         bool walkWhenSneaking;
         bool fastAmmoLoad;
@@ -223,6 +240,8 @@ namespace {
         values.saveCompatibility = settings.enhancements.save_compatibility;
         values.interfaceSize = settings.touch.hud_scale;
         values.mapFilter = settings.world_view.filter;
+        values.colorPreset = graphicsColorPresetIndex(settings.graphics.color_preset.c_str());
+        values.highRefresh = settings.graphics.high_refresh;
         values.autoOpenDoors = settings.qol.auto_open_doors;
         values.walkWhenSneaking = settings.qol.walk_when_sneaking;
         values.fastAmmoLoad = settings.qol.fast_ammo_load;
@@ -247,6 +266,8 @@ namespace {
         values.saveCompatibility = EnhancementSettings().save_compatibility;
         values.interfaceSize = TouchSettings().hud_scale;
         values.mapFilter = WorldViewSettings().filter;
+        values.colorPreset = 0;
+        values.highRefresh = GraphicsSettings().high_refresh;
         QolSettings qol;
         values.autoOpenDoors = qol.auto_open_doors;
         values.walkWhenSneaking = qol.walk_when_sneaking;
@@ -322,6 +343,9 @@ namespace {
         settings.touch.hud_scale = values.interfaceSize;
         settings.world_view.filter = values.mapFilter;
         worldViewSetFilter(values.mapFilter);
+        settings.graphics.color_preset = graphicsColorPresetName(values.colorPreset);
+        screenSetColorPreset(values.colorPreset);
+        screenSetHighRefresh(values.highRefresh);
         settings.qol.auto_open_doors = values.autoOpenDoors;
         settings.qol.walk_when_sneaking = values.walkWhenSneaking;
         settings.qol.fast_ammo_load = values.fastAmmoLoad;
@@ -342,6 +366,7 @@ namespace {
         Combat,
         Sound,
         Display,
+        Graphics,
         // The game's files and saves (Android: the app's import screen):
         // actions, not settings - no apply or reset there.
         Files,
@@ -623,14 +648,28 @@ namespace {
             rows.push_back(row);
         }
         {
-            Row row { Section::Display, RowKind::Choice, kTextMapFilter, "Map smoothing", Origin::Port };
-            row.options = { kTextFilterNearest, kTextFilterLinear, kTextFilterSharp };
+            Row row { Section::Graphics, RowKind::Choice, kTextMapFilter, "World filter", Origin::Port, kTextFilterNote, "MMPX / Scale3x smooth pixel edges; slower when zoomed out" };
+            row.options = { kTextFilterNearest, kTextFilterLinear, kTextFilterSharp, kTextFilterMmpx, kTextFilterScale3x };
             row.optionsFromCe = true;
             row.get = [](const Values& values) { return static_cast<float>(values.mapFilter); };
             row.set = [](Values& values, float value) { values.mapFilter = static_cast<int>(value); };
             rows.push_back(row);
         }
 
+        {
+            Row row { Section::Graphics, RowKind::Choice, kTextColorPreset, "Colour preset", Origin::Port };
+            row.options = { kTextPresetOriginal, kTextPresetOled, kTextPresetWarm, kTextPresetCold, kTextPresetNight };
+            row.optionsFromCe = true;
+            row.get = [](const Values& values) { return static_cast<float>(values.colorPreset); };
+            row.set = [](Values& values, float value) { values.colorPreset = static_cast<int>(value); };
+            rows.push_back(row);
+        }
+        {
+            Row row { Section::Graphics, RowKind::Toggle, kTextHighRefresh, "High refresh", Origin::Port, kTextHighRefreshNote, "Use the display rate for touch and UI; game speed stays the same" };
+            row.get = [](const Values& values) { return values.highRefresh ? 1.0f : 0.0f; };
+            row.set = [](Values& values, float value) { values.highRefresh = value != 0.0f; };
+            rows.push_back(row);
+        }
         return rows;
     }
 
@@ -723,8 +762,9 @@ namespace {
     {
         int id = row.options[index];
         if (row.optionsFromCe) {
-            static const char* const kFallbacks[] = { "Pixels", "Smooth", "Sharp" };
-            return muiDecodeGameText(muiText(id, kFallbacks[std::min(index, 2)]));
+            static const char* const kFilters[] = { "Pixels", "Smooth", "Sharp", "MMPX", "Scale3x" };
+            static const char* const kPresets[] = { "Original", "OLED", "Warm", "Cold", "Night" };
+            return muiDecodeGameText(muiText(id, row.textId == kTextColorPreset ? kPresets[index] : kFilters[index]));
         }
 
         MessageListItem item;
@@ -753,6 +793,7 @@ namespace {
     // Volumes and brightness are heard and seen while they change.
     void PreferencesScreen::previewChanges(const Values& before)
     {
+        if (before.colorPreset != edited.colorPreset) capturePreview();
         const PreferenceValues& a = before.preferences;
         const PreferenceValues& b = edited.preferences;
         if (a.masterVolume != b.masterVolume || a.musicVolume != b.musicVolume
@@ -767,7 +808,25 @@ namespace {
 
     void PreferencesScreen::capturePreview()
     {
-        previewValid = inGame && worldViewCaptureView(&preview, &previewWidth, &previewHeight, 480);
+        previewValid = inGame && worldViewCaptureView(&preview, &previewWidth, &previewHeight, 480, edited.colorPreset);
+        if (!previewValid) {
+            // A live swatch is also available from the title menu.
+            const Uint32 colors[] = { 0xFF000000, 0xFF404040, 0xFF808080, 0xFFFFFFFF, 0xFF985C32, 0xFFB02C28, 0xFF32904C, 0xFF3C68B8 };
+            previewWidth = 256;
+            previewHeight = 48;
+            preview.resize(previewWidth * previewHeight * 4);
+            for (int x = 0; x < previewWidth; x++) {
+                Uint32 color = graphicsGradeColor(colors[x / 32], edited.colorPreset);
+                for (int y = 0; y < previewHeight; y++) {
+                    unsigned char* pixel = preview.data() + (y * previewWidth + x) * 4;
+                    pixel[0] = (color >> 16) & 255;
+                    pixel[1] = (color >> 8) & 255;
+                    pixel[2] = color & 255;
+                    pixel[3] = 255;
+                }
+            }
+            previewValid = true;
+        }
         previewVersion++;
     }
 
@@ -807,6 +866,7 @@ namespace {
             { kTextSectionCombat, "Combat" },
             { kTextSectionSound, "Sound" },
             { kTextSectionDisplay, "Display" },
+            { kTextSectionGraphics, "Graphics" },
         };
         std::vector<std::u32string> labels;
         std::vector<Section> shown;
@@ -824,7 +884,8 @@ namespace {
         std::vector<bool> marked(shown.size(), false);
         for (const Row& row : rows) {
             if (changed(row)) {
-                marked[static_cast<size_t>(row.section)] = true;
+                auto found = std::find(shown.begin(), shown.end(), row.section);
+                if (found != shown.end()) marked[found - shown.begin()] = true;
             }
         }
 
@@ -834,7 +895,7 @@ namespace {
         if (chosen != current && chosen >= 0 && chosen < static_cast<int>(shown.size())) {
             section = shown[chosen];
             resetScroll = true;
-            if (section == Section::Display) {
+            if (section == Section::Display || section == Section::Graphics) {
                 capturePreview();
             }
         }
@@ -1103,7 +1164,7 @@ namespace {
     {
         float rowHeight = ui.dp(50.0f);
         float headerHeight = ui.dp(30.0f);
-        bool showPreview = section == Section::Display && previewValid;
+        bool showPreview = (section == Section::Display || section == Section::Graphics) && previewValid;
         float previewSpace = showPreview ? std::min(rect.h * 0.45f, ui.dp(130.0f)) + ui.dp(8.0f) : 0.0f;
 
         float contentHeight = previewSpace;

@@ -117,10 +117,7 @@ namespace {
 
     void updatePalette(Uint32* palette)
     {
-        SDL_Color* colors = gSdlSurface->format->palette->colors;
-        for (int index = 0; index < 256; index++) {
-            palette[index] = 0xFF000000 | (colors[index].r << 16) | (colors[index].g << 8) | colors[index].b;
-        }
+        memcpy(palette, screenGetPalette(), sizeof(gPalette));
     }
 
     // Finds palette entries which really changed (the game sets all cycling

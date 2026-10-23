@@ -95,7 +95,7 @@ namespace {
         unsigned int version = 0;
     };
     std::map<std::string, IndexedTexture> gIndexedTextures;
-    unsigned char gPalette[768];
+    Uint32 gPalette[256];
     unsigned int gPaletteVersion = 0;
     unsigned int gPaletteCheckFrame = 0;
     unsigned int gFrame = 0;
@@ -699,7 +699,7 @@ static void checkPalette()
 {
     if (gPaletteCheckFrame != gFrame) {
         gPaletteCheckFrame = gFrame;
-        unsigned char* palette = directDrawGetPalette();
+        const Uint32* palette = screenGetPalette();
         if (memcmp(palette, gPalette, sizeof(gPalette)) != 0) {
             memcpy(gPalette, palette, sizeof(gPalette));
             gPaletteVersion++;
@@ -716,11 +716,7 @@ static bool uploadIndexed(ArtTexture& entry, const unsigned char* data, int widt
         if (color == 0) {
             pixels[index] = 0;
         } else {
-            // Palette is 6 bits per channel.
-            Uint32 r = gPalette[color * 3] << 2;
-            Uint32 g = gPalette[color * 3 + 1] << 2;
-            Uint32 b = gPalette[color * 3 + 2] << 2;
-            pixels[index] = 0xFF000000 | (r << 16) | (g << 8) | b;
+            pixels[index] = gPalette[color];
         }
     }
 

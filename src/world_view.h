@@ -137,7 +137,7 @@ void worldViewSetFilter(int filter);
 
 // The part of the map on screen as RGBA in the screen's palette now (with
 // its brightness), at most [maxWidth] pixels wide. False when there's no map.
-bool worldViewCaptureView(std::vector<unsigned char>* rgba, int* width, int* height, int maxWidth);
+bool worldViewCaptureView(std::vector<unsigned char>* rgba, int* width, int* height, int maxWidth, int preset = 0);
 
 // Renders world layer. Must be called before UI texture is rendered.
 void worldViewRender(SDL_Renderer* renderer);

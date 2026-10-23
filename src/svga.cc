@@ -7,6 +7,9 @@
 #include <algorithm>
 
 #include <SDL.h>
+#ifdef __ANDROID__
+#include <jni.h>
+#endif
 
 #include "color.h"
 #include "config.h"
@@ -14,6 +17,9 @@
 #include "dinput.h"
 #include "draw.h"
 #include "game.h"
+#include "graphics.h"
+#include "input.h"
+#include "touch_controls.h"
 #include "interface.h"
 #include "memory.h"
 #include "mouse.h"
@@ -59,6 +65,7 @@ static const unsigned char* gScreenBlitLayerSource = nullptr;
 
 // Current palette in UI texture pixel format.
 static Uint32 gScreenPalette[256];
+static int gColorPreset = 0;
 
 // CE: Part of the UI texture surface changed since it was uploaded last.
 static bool gScreenDirty = false;
@@ -271,6 +278,7 @@ int directDrawInit(int width, int height, int bpp)
         return -1;
     }
 
+    gColorPreset = graphicsColorPresetIndex(settings.graphics.color_preset.c_str());
     screenUpdatePalette(0, 256);
 
     return 0;
@@ -325,7 +333,8 @@ void directDrawSetPalette(unsigned char* palette)
         }
 
         SDL_SetPaletteColors(gSdlSurface->format->palette, colors, 0, 256);
-        screenUpdatePalette(0, 256);
+        gColorPreset = graphicsColorPresetIndex(settings.graphics.color_preset.c_str());
+    screenUpdatePalette(0, 256);
         screenConvertRect(0, 0, gSdlSurface->w, gSdlSurface->h);
     }
 }
@@ -384,13 +393,28 @@ static bool gScreenPaletteChanged[256];
 static void screenUpdatePalette(int first, int count)
 {
     SDL_Color* colors = gSdlSurface->format->palette->colors;
-    for (int index = 0; index < 256; index++) {
-        Uint32 color = 0xFF000000 | (colors[index].r << 16) | (colors[index].g << 8) | colors[index].b;
+    memset(gScreenPaletteChanged, 0, sizeof(gScreenPaletteChanged));
+    for (int index = first; index < first + count; index++) {
+        Uint32 color = graphicsGradeColor(0xFF000000 | (colors[index].r << 16) | (colors[index].g << 8) | colors[index].b, gColorPreset);
         gScreenPaletteChanged[index] = gScreenPalette[index] != color;
         gScreenPalette[index] = color;
     }
 
     worldViewInvalidatePalette(first, count);
+}
+
+const Uint32* screenGetPalette()
+{
+    return gScreenPalette;
+}
+
+void screenSetColorPreset(int preset)
+{
+    gColorPreset = std::clamp(preset, 0, kColorPresetCount - 1);
+    if (gSdlSurface != nullptr) {
+        screenUpdatePalette(0, 256);
+        screenConvertRect(0, 0, gSdlSurface->w, gSdlSurface->h);
+    }
 }
 
 static void screenMarkDirty(int x, int y, int width, int height)
@@ -534,6 +558,68 @@ bool screenIsExclusiveFullscreen()
     return (flags & SDL_WINDOW_FULLSCREEN_DESKTOP) == SDL_WINDOW_FULLSCREEN;
 }
 
+// Presentation-only subframe: pump touches and draw, with no inputGetInput,
+// tickersExecute, per-frame script hooks or devAutotestTick. Gestures may
+// post the same user commands as on a regular input frame.
+static void screenPresentSubframe()
+{
+    if (!gProgramIsActive || gSdlRenderer == nullptr || muiHoldsFrame()) return;
+    _GNW95_process_message();
+    if (!gProgramIsActive) return;
+    touchControlsProcessGestures();
+    renderFpsCounter();
+    renderPresent();
+}
+
+static void screenConfigureRefresh()
+{
+    unsigned int rate = 60;
+#ifdef __ANDROID__
+    JNIEnv* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+    jobject activity = static_cast<jobject>(SDL_AndroidGetActivity());
+    if (env != nullptr && activity != nullptr) {
+        jclass cls = env->GetObjectClass(activity);
+        jmethodID method = env->GetMethodID(cls, "getRefreshRate", "()F");
+        if (method != nullptr) rate = static_cast<unsigned int>(env->CallFloatMethod(activity, method) + 0.5f);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        env->DeleteLocalRef(cls);
+        env->DeleteLocalRef(activity);
+    }
+#else
+    SDL_DisplayMode mode;
+    if (gSdlWindow != nullptr && SDL_GetCurrentDisplayMode(SDL_GetWindowDisplayIndex(gSdlWindow), &mode) == 0 && mode.refresh_rate > 0) {
+        rate = mode.refresh_rate;
+    }
+#endif
+    rate = std::clamp(rate, 60u, 240u);
+    sharedFpsLimiter.setPresentation(settings.graphics.high_refresh ? rate : 60, screenPresentSubframe);
+}
+
+void screenSetHighRefresh(bool enabled)
+{
+    settings.graphics.high_refresh = enabled;
+#ifdef __ANDROID__
+    JNIEnv* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+    jobject activity = static_cast<jobject>(SDL_AndroidGetActivity());
+    if (env != nullptr && activity != nullptr) {
+        jclass cls = env->GetObjectClass(activity);
+        jmethodID method = env->GetMethodID(cls, "setHighRefresh", "(Z)V");
+        if (method != nullptr) env->CallVoidMethod(activity, method, static_cast<jboolean>(enabled));
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        env->DeleteLocalRef(cls);
+        env->DeleteLocalRef(activity);
+    }
+#endif
+    if (gSdlRenderer != nullptr) {
+        // Keep the original swap interval 0. A vsync wait in a supplemental
+        // frame can consume the next logic tick on 90 Hz / throttled displays.
+        // The limiter paces presentation inside the original logic budget;
+        // Android's compositor presents the submitted buffers at display rate.
+        SDL_RenderSetVSync(gSdlRenderer, 0);
+    }
+    screenConfigureRefresh();
+}
+
 static bool createRenderer(int width, int height)
 {
     gSdlRenderer = SDL_CreateRenderer(gSdlWindow, -1, 0);
@@ -544,6 +630,8 @@ static bool createRenderer(int width, int height)
     if (SDL_RenderSetLogicalSize(gSdlRenderer, width, height) != 0) {
         return false;
     }
+
+    screenSetHighRefresh(settings.graphics.high_refresh);
 
     // CE: UI texture has alpha channel to let world layer show through.
     gSdlTexture = SDL_CreateTexture(gSdlRenderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
@@ -600,6 +688,8 @@ void handleWindowSizeChanged()
     mouseDeviceRefreshWindowMapping();
 }
 
+static unsigned int gPresentedFrames = 0;
+
 void renderFpsCounter()
 {
     if (!settings.debug.show_fps || gSdlSurface == nullptr || gSdlTextureSurface == nullptr) {
@@ -615,11 +705,12 @@ void renderFpsCounter()
         sampleStartTicks = now;
     }
 
-    sampleFrames++;
+    sampleFrames = static_cast<int>(gPresentedFrames);
 
     unsigned int elapsed = now - sampleStartTicks;
     if (elapsed >= 500) {
         fps = sampleFrames * 1000.0 / elapsed;
+        gPresentedFrames = 0;
         sampleFrames = 0;
         sampleStartTicks = now;
     }
@@ -653,8 +744,7 @@ void renderFpsCounter()
     rect.y = 0;
     rect.w = width;
     rect.h = height;
-    SDL_BlitSurface(gSdlSurface, &rect, gSdlTextureSurface, &rect);
-    screenMarkDirty(rect.x, rect.y, rect.w, rect.h);
+    screenConvertRect(rect.x, rect.y, rect.w, rect.h);
 }
 
 void renderPresent()
@@ -664,6 +754,12 @@ void renderPresent()
         return;
     }
 
+    // Follow display changes / LTPO policy without crossing JNI each frame.
+    static Uint32 refreshCheck = 0;
+    if (SDL_GetTicks() - refreshCheck >= 1000) {
+        refreshCheck = SDL_GetTicks();
+        screenConfigureRefresh();
+    }
     PerfFrame perf;
     perfMonitorMark(&perf.start);
     SDL_RenderClear(gSdlRenderer);
@@ -696,6 +792,7 @@ void renderPresent()
     devAutotestPump();
     devAutotestCapture(gSdlRenderer);
     SDL_RenderPresent(gSdlRenderer);
+    gPresentedFrames++;
     perfMonitorMark(&perf.end);
     perfMonitorFrame(perf);
 }
