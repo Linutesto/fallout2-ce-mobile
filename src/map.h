@@ -118,6 +118,7 @@ const char* mapBuildSavePath(const char* name);
 int mapLoadSaved(char* fileName);
 int mapGetLoadedAreaId();
 int mapSetTransition(MapTransition* transition);
+bool mapHasPendingTransition();
 // CE: A map is being loaded: the old one's objects are gone, the new one's
 // aren't all there, the party is set aside (frames drawn meanwhile, from the
 // file reading's progress, mustn't look at the world).

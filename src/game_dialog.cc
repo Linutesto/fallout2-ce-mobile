@@ -300,6 +300,15 @@ static GameDialogStatus _gdialog_state = GAME_DIALOG_NONE;
 
 // 0x518720 gdDialogWentOff
 static bool _gdDialogWentOff = false;
+static bool gFreeTalkOnly = false;
+static Object* gFreeTalkDeferredDestroy = nullptr;
+
+bool gameDialogDeferSpeakerDestruction(Object* speaker)
+{
+    if (!gFreeTalkOnly || speaker == nullptr || speaker != gGameDialogSpeaker) return false;
+    gFreeTalkDeferredDestroy = speaker;
+    return true;
+}
 
 // 0x518724 gdDialogTurnMouseOff
 static bool _gdDialogTurnMouseOff = false;
@@ -921,7 +930,7 @@ void gameDialogEnter(Object* speaker, int mode)
 
     actionLog("dialog with%s", actionLogObject(speaker));
 
-    if (speaker->sid == -1) {
+    if (speaker->sid == -1 && !npcBrainOffersTalk(speaker->pid)) {
         return;
     }
 
@@ -983,8 +992,41 @@ void gameDialogEnter(Object* speaker, int mode)
         scriptExecProc(speaker->sid, SCRIPT_PROC_TALK);
     }
 
-    Script* script;
-    if (scriptGetScript(sid, &script) == -1) {
+    Script* script = nullptr;
+    bool hasScript = scriptGetScript(sid, &script) != -1;
+    // A flavor script may just float a line. Offer the same free-text UI
+    // after it, without replacing its script or inventing quest options.
+    // A surviving script owner is required: talk scripts can destroy actors.
+    Object* liveSpeaker = hasScript ? script->owner : (sid == -1 ? speaker : nullptr);
+    if (!_gdDialogWentOff && liveSpeaker == speaker && liveSpeaker != nullptr
+        && ProtoId(liveSpeaker).objectType() == OBJ_TYPE_CRITTER
+        && critterIsActive(liveSpeaker) && !critterIsFleeing(liveSpeaker)
+        && critterGetBodyType(liveSpeaker) == BODY_TYPE_BIPED
+        && !isInCombat() && !scriptsHasPendingRequests() && !mapHasPendingTransition()
+        && _game_user_wants_to_quit == GAME_QUIT_REQUEST_NONE
+        && npcBrainOffersTalk(liveSpeaker->pid)) {
+        gFreeTalkOnly = true;
+        gGameDialogSpeaker = liveSpeaker;
+        if (_gdialogInitFromScript(HeadFrmId(), HeadFidget::Neutral) == 0) {
+            _gdialogStart();
+            gameDialogSetTextReply(nullptr, -4, "What would you like to talk about?");
+            gameDialogAddTextOptionWithProc(-4, "[Leave]", 0, GAME_DIALOG_REACTION_NEUTRAL);
+            debugPrint("\nNPC brain: free talk with flavor NPC %s\n", critterGetName(liveSpeaker));
+            _gdialogGo();
+            _gdialogExitFromScript();
+        }
+        gFreeTalkOnly = false;
+        if (gFreeTalkDeferredDestroy != nullptr) {
+            Object* destroyed = gFreeTalkDeferredDestroy;
+            gFreeTalkDeferredDestroy = nullptr;
+            gGameDialogSpeaker = nullptr;
+            objectDestroy(destroyed, nullptr);
+        }
+        // Scripts may run while the dialogue pumps events; reacquire it.
+        hasScript = scriptGetScript(sid, &script) != -1;
+    }
+
+    if (!hasScript) {
         gameMouseObjectsShow();
         isoEnable();
         scriptsExecMapUpdateProc();
@@ -2193,6 +2235,7 @@ static void gameDialogRunWindowLoop()
     int pageOffsets[10];
     pageOffsets[0] = 0;
     for (;;) {
+        if (gFreeTalkDeferredDestroy != nullptr) break;
         sharedFpsLimiter.mark();
 
         int keyCode = inputGetInput();
@@ -2336,6 +2379,7 @@ static void gameDialogRunWindowLoop()
 static void gameDialogRunTouchLoop()
 {
     for (;;) {
+        if (gFreeTalkDeferredDestroy != nullptr) break;
         sharedFpsLimiter.mark();
 
         int keyCode = inputGetInput();
@@ -2354,6 +2398,8 @@ static void gameDialogRunTouchLoop()
         }
 
         devAutotestTick();
+
+        if (gFreeTalkDeferredDestroy != nullptr) break;
 
         if (dialogSwitchMode == GAME_DIALOG_MODE_BARTER_ACTIVE) {
             gameDialogRunBarter();
@@ -2519,7 +2565,7 @@ static int gameDialogFreeTalkInput(std::string* typed)
 
         devAutotestTick();
 
-        if (_game_user_wants_to_quit != GAME_QUIT_REQUEST_NONE || keyCode == KEY_ESCAPE) {
+        if (gFreeTalkDeferredDestroy != nullptr || _game_user_wants_to_quit != GAME_QUIT_REQUEST_NONE || keyCode == KEY_ESCAPE) {
             rc = -1;
         } else if (keyCode == KEY_RETURN) {
             rc = typed->empty() ? -1 : 0;
@@ -2561,11 +2607,13 @@ static void gameDialogFreeTalkFillRequest(NpcBrainRequest* request, const std::s
     request->npcInstance = std::to_string(scriptsSetUniqueObjectId(speaker));
     request->npcPid = speaker->pid;
     request->npcName = critterGetName(speaker);
+    const char* description = objectGetDescription(speaker);
+    request->npcDescription = npcBrainSanitize(description != nullptr ? description : "", 300);
     request->map = gMapHeader.name;
     char* mapName = mapGetName(mapGetCurrentMap(), gElevation);
     request->mapName = mapName != nullptr ? mapName : "";
     request->partyMember = objectIsPartyMember(speaker);
-    request->canBarter = gameDialogSpeakerCanBarter() || request->partyMember;
+    request->canBarter = !gFreeTalkOnly && (gameDialogSpeakerCanBarter() || request->partyMember);
 
     Inventory* inventory = &(speaker->data.inventory);
     for (int index = 0; index < inventory->length && request->inventory.size() < 40; index++) {
@@ -2648,7 +2696,7 @@ static bool gameDialogFreeTalkWait(const std::shared_ptr<NpcBrainCall>& call, Np
 
         devAutotestTick();
 
-        if (_game_user_wants_to_quit != GAME_QUIT_REQUEST_NONE || keyCode == KEY_ESCAPE) {
+        if (gFreeTalkDeferredDestroy != nullptr || _game_user_wants_to_quit != GAME_QUIT_REQUEST_NONE || keyCode == KEY_ESCAPE) {
             response->error = "cancelled";
             return false;
         }
@@ -5211,6 +5259,7 @@ void _gdCustomUpdateSetting(int option, int value)
 // 0x44A52C
 void gameDialogBarterButtonUpMouseUp(int btn, int keyCode)
 {
+    if (gFreeTalkOnly) return;
     const ProtoId speakerProtoId = gGameDialogSpeaker;
     if (speakerProtoId.objectType() != OBJ_TYPE_CRITTER) {
         return;
@@ -5715,7 +5764,7 @@ bool gameDialogGetHeadImage(const unsigned char** data, int* width, int* height,
 // Same check as the barter button (`gameDialogBarterButtonUpMouseUp`).
 bool gameDialogSpeakerCanBarter()
 {
-    if (gGameDialogSpeaker == nullptr || ProtoId(gGameDialogSpeaker).objectType() != OBJ_TYPE_CRITTER) {
+    if (gFreeTalkOnly || gGameDialogSpeaker == nullptr || ProtoId(gGameDialogSpeaker).objectType() != OBJ_TYPE_CRITTER) {
         return false;
     }
 

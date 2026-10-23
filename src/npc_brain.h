@@ -33,6 +33,7 @@ struct NpcBrainRequest {
     std::string npcInstance;
     int npcPid = 0;
     std::string npcName;
+    std::string npcDescription;
     std::string map;
     std::string mapName;
     bool partyMember = false;

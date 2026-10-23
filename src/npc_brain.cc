@@ -770,6 +770,9 @@ std::string npcBrainRequestToJson(const NpcBrainRequest& request)
     jsonAppendKey(out, "name");
     jsonAppendString(out, request.npcName);
     out += ",";
+    jsonAppendKey(out, "description");
+    jsonAppendString(out, request.npcDescription);
+    out += ",";
     jsonAppendKey(out, "instance");
     jsonAppendString(out, request.npcInstance);
     out += ",";

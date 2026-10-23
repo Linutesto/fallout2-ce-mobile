@@ -18,6 +18,7 @@
 #include "debug.h"
 #include "draw.h"
 #include "game.h"
+#include "game_dialog.h"
 #include "game_mouse.h"
 #include "item.h"
 #include "light.h"
@@ -2201,6 +2202,10 @@ int objectDestroy(Object* object, Rect* rect)
 {
     if (object == nullptr) {
         return -1;
+    }
+    if (gameDialogDeferSpeakerDestruction(object)) {
+        if (rect != nullptr) objectGetRect(object, rect);
+        return 0;
     }
 
     _gmouse_remove_item_outline(object);

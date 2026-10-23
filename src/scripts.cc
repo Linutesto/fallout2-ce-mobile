@@ -1415,6 +1415,11 @@ int _scripts_check_state_in_combat()
 }
 
 // 0x4A457C
+bool scriptsHasPendingRequests()
+{
+    return gScriptsRequests != SCRIPT_REQUEST_NONE;
+}
+
 int scriptsRequestCombat(CombatStartData* combat)
 {
     if ((gScriptsRequests & SCRIPT_REQUEST_COMBAT_LOCKED) != SCRIPT_REQUEST_NONE) {

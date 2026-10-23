@@ -19,6 +19,8 @@ int gameDialogExit();
 bool _gdialogActive();
 bool gameDialogWindowActive();
 void gameDialogEnter(Object* speaker, int mode);
+// Keep a flavor-dialogue speaker alive until the synthetic UI has closed.
+bool gameDialogDeferSpeakerDestruction(Object* speaker);
 void _gdialogSystemEnter();
 void gameDialogStartLips(const char* audioFileName);
 int gameDialogEnable();

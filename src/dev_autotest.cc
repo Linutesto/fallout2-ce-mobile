@@ -458,6 +458,8 @@ enum DevAutotestAction {
     // Waits up to [a] frames for the free talk's answer (the node's options
     // back, the reply not the typing hint or the thinking dots).
     DEV_AUTOTEST_ACTION_WAIT_FREE_TALK,
+    DEV_AUTOTEST_ACTION_DESTROY_TALK_SPEAKER,
+    DEV_AUTOTEST_ACTION_ASSERT_TALK_CLOSED,
 };
 
 struct DevAutotestStep {
@@ -1675,6 +1677,36 @@ static const DevAutotestStep kDevAutotestFreeTalkEttuSteps[] = {
     { DEV_AUTOTEST_ACTION_KEY, SDL_SCANCODE_RETURN, 0, 0, 10, "f11_said" },
     { DEV_AUTOTEST_ACTION_WAIT_FREE_TALK, 4200, 0, 0, 60, "f12_answer" },
     { DEV_AUTOTEST_ACTION_LOG_DIALOG, 0, 0, 0, 1, "f13_state" },
+};
+
+static const DevAutotestStep kDevAutotestFreeTalkFlavorSteps[] = {
+    { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 30, "f00_start" },
+    { DEV_AUTOTEST_ACTION_LOAD_GAME, 9, 0, 0, 120, "f01_loaded" },
+    { DEV_AUTOTEST_ACTION_TALK_TO_PID, 4, 0, 0, 60, "f02_talk_flavor" },
+    { DEV_AUTOTEST_ACTION_WAIT_TALKING, 600, 0, 0, 30, "f02b_talking" },
+    { DEV_AUTOTEST_ACTION_LOG_DIALOG, 0, 0, 0, 1, "f03_options" },
+    { DEV_AUTOTEST_ACTION_CHOOSE_FREE_TALK, 0, 0, 0, 20, "f04_speak_freely" },
+    { DEV_AUTOTEST_ACTION_TYPE_TEXT, 0, 0, 0, 2, "f05a_type", "Hello. Who are you and what " },
+    { DEV_AUTOTEST_ACTION_TYPE_TEXT, 0, 0, 0, 2, "f05b_type", "do you do here?" },
+    { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 10, "f05c_typed" },
+    { DEV_AUTOTEST_ACTION_KEY, SDL_SCANCODE_RETURN, 0, 0, 10, "f06_said" },
+    { DEV_AUTOTEST_ACTION_WAIT_FREE_TALK, 4200, 0, 0, 20, "f07_answer" },
+    { DEV_AUTOTEST_ACTION_LOG_DIALOG, 0, 0, 0, 1, "f08_state" },
+    { DEV_AUTOTEST_ACTION_CHOOSE_FREE_TALK, 0, 0, 0, 20, "f09_speak_again" },
+    { DEV_AUTOTEST_ACTION_TYPE_TEXT, 0, 0, 0, 2, "f10a_type", "We spoke a moment ago. " },
+    { DEV_AUTOTEST_ACTION_TYPE_TEXT, 0, 0, 0, 2, "f10b_type", "What did I ask you?" },
+    { DEV_AUTOTEST_ACTION_KEY, SDL_SCANCODE_RETURN, 0, 0, 10, "f11_said" },
+    { DEV_AUTOTEST_ACTION_WAIT_FREE_TALK, 4200, 0, 0, 60, "f12_answer" },
+    { DEV_AUTOTEST_ACTION_LOG_DIALOG, 0, 0, 0, 1, "f13_state" },
+};
+
+// A delayed script can destroy the flavor NPC while its synthetic UI runs.
+static const DevAutotestStep kDevAutotestFlavorDestroySteps[] = {
+    { DEV_AUTOTEST_ACTION_LOAD_GAME, 9, 0, 0, 60, "z00_loaded" },
+    { DEV_AUTOTEST_ACTION_TALK_TO_PID, 4, 0, 0, 20, "z01_talk_flavor" },
+    { DEV_AUTOTEST_ACTION_WAIT_TALKING, 600, 0, 0, 10, "z02_talking" },
+    { DEV_AUTOTEST_ACTION_DESTROY_TALK_SPEAKER, 0, 0, 0, 20, "z03_destroyed" },
+    { DEV_AUTOTEST_ACTION_ASSERT_TALK_CLOSED, 0, 0, 0, 1, "z04_closed" },
 };
 
 // Portable conversion smoke test: uses the conversion's own start map.
@@ -2902,6 +2934,12 @@ void devAutotestSetScenario(const char* name)
     } else if (strcmp(name, "conversion") == 0) {
         gDevAutotestSteps = kDevAutotestConversionSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestConversionSteps) / sizeof(kDevAutotestConversionSteps[0]);
+    } else if (strcmp(name, "flavor-destroy") == 0) {
+        gDevAutotestSteps = kDevAutotestFlavorDestroySteps;
+        gDevAutotestStepCount = sizeof(kDevAutotestFlavorDestroySteps) / sizeof(kDevAutotestFlavorDestroySteps[0]);
+    } else if (strcmp(name, "freetalk-flavor") == 0) {
+        gDevAutotestSteps = kDevAutotestFreeTalkFlavorSteps;
+        gDevAutotestStepCount = sizeof(kDevAutotestFreeTalkFlavorSteps) / sizeof(kDevAutotestFreeTalkFlavorSteps[0]);
     } else if (strcmp(name, "freetalk-ettu") == 0) {
         gDevAutotestSteps = kDevAutotestFreeTalkEttuSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestFreeTalkEttuSteps) / sizeof(kDevAutotestFreeTalkEttuSteps[0]);
@@ -3662,6 +3700,14 @@ void devAutotestTick()
             }
             break;
         }
+        case DEV_AUTOTEST_ACTION_DESTROY_TALK_SPEAKER:
+            if (gGameDialogSpeaker == nullptr) { devAutotestLog("FAIL: no speaker to destroy\n"); exit(EXIT_FAILURE); }
+            objectDestroy(gGameDialogSpeaker, nullptr);
+            break;
+        case DEV_AUTOTEST_ACTION_ASSERT_TALK_CLOSED:
+            if (gameDialogWindowActive() || gGameDialogSpeaker != nullptr) { devAutotestLog("FAIL: destroyed speaker still in dialogue\n"); exit(EXIT_FAILURE); }
+            devAutotestLog("PASS: destroyed speaker dialogue closed safely\n");
+            break;
         case DEV_AUTOTEST_ACTION_CHOOSE_FREE_TALK: {
             int found = -1;
             for (int index = 0; index < gameDialogGetOptionCount(); index++) {

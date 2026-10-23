@@ -1440,6 +1440,11 @@ int mapSetTransition(MapTransition* transition)
 }
 
 // 0x4835F8
+bool mapHasPendingTransition()
+{
+    return gMapTransition.map != 0;
+}
+
 int mapHandleTransition()
 {
     if (gMapTransition.map == 0) {

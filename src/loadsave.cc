@@ -542,8 +542,10 @@ static std::string portDataPath(const char* name)
         std::string directory = internal;
         const char* profile = SDL_getenv("FALLOUT_PROFILE");
         if (profile != nullptr && *profile) {
-            directory += std::string("/profiles/") + profile;
-            compat_mkdir_recursive(directory.c_str());
+            directory += "/profiles";
+            compat_mkdir(directory.c_str());
+            directory += std::string("/") + profile;
+            compat_mkdir(directory.c_str());
         }
         return directory + "/" + name;
     }
