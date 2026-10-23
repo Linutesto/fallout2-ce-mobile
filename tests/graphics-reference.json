@@ -1,0 +1,42 @@
+{
+  "grading_colors": 6080,
+  "presets": [
+    "original",
+    "oled_punch",
+    "warm_wasteland",
+    "cold_vault",
+    "night_readable"
+  ],
+  "upscale_images": 658,
+  "sources": {
+    "grading.py": "c8c0091fab1a36698ff5ea853557fa65b848d1edaca96ee1a8a46b70759dc2ea",
+    "upscale.py": "e0ac797ad0fe834cac17709b5cfaa4417dbe3e51cb55148be244f0d3b94f0b65"
+  },
+  "black_outputs": {
+    "original": [
+      0,
+      0,
+      0
+    ],
+    "oled_punch": [
+      0,
+      0,
+      0
+    ],
+    "warm_wasteland": [
+      5,
+      0,
+      0
+    ],
+    "cold_vault": [
+      0,
+      0,
+      5
+    ],
+    "night_readable": [
+      31,
+      31,
+      31
+    ]
+  }
+}

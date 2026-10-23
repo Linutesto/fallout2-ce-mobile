@@ -310,6 +310,8 @@ set(FALLOUT_ENGINE_SOURCES
     "src/dev_autotest.cc"
     "src/dev_story_test.cc"
     "src/dev_autotest.h"
+    "src/graphics.cc"
+    "src/graphics.h"
     "src/world_view.cc"
     "src/world_view.h"
     "src/worldmap.cc"
@@ -937,6 +939,10 @@ if(CMAKE_SYSTEM_NAME MATCHES "Emscripten")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g")
 endif()
 
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    set_source_files_properties(src/graphics.cc PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+endif()
+
 # CE: Tests of engine-independent parts (tests/*_test.cc), desktop POSIX
 # builds: `cmake --build <build> --target <name>`, then `ctest` in <build>.
 if(UNIX AND NOT ANDROID AND NOT IOS AND NOT CMAKE_SYSTEM_NAME MATCHES "Emscripten")
@@ -949,6 +955,12 @@ if(UNIX AND NOT ANDROID AND NOT IOS AND NOT CMAKE_SYSTEM_NAME MATCHES "Emscripte
         target_compile_options(${name} PRIVATE -UNDEBUG)
         add_test(NAME ${name} COMMAND ${name})
     endfunction()
+
+    ce_add_test(graphics_test "src/graphics.cc")
+    target_compile_definitions(graphics_test PRIVATE GRAPHICS_REFERENCE="${CMAKE_CURRENT_SOURCE_DIR}/tests/graphics-reference.bin")
+    ce_add_test(fps_limiter_test "src/fps_limiter.cc")
+    target_include_directories(fps_limiter_test PRIVATE ${SDL2_INCLUDE_DIRS})
+    target_link_libraries(fps_limiter_test ${SDL2_LIBRARIES})
 
     ce_add_test(save_catalog_test "src/save_catalog.cc" "src/save_records.cc" "src/save_storage.cc")
     ce_add_test(npc_brain_wire_test "src/npc_brain_wire.cc")
