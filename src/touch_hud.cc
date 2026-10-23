@@ -45,6 +45,7 @@
 #include "svga.h"
 #include "tactical_view.h"
 #include "tile.h"
+#include "touch_controls.h"
 #include "window_manager.h"
 
 namespace fallout {
@@ -58,6 +59,8 @@ namespace {
     constexpr int kEventHighlight = 2;
     constexpr int kEventCancelTarget = 3;
     constexpr int kEventTacticalView = 4;
+    constexpr int kEventAttack = 5;
+    constexpr int kEventNextTarget = 6;
     // Attack mode chip `index` - `kEventModeBase + index`.
     constexpr int kEventModeBase = 100;
 
@@ -88,6 +91,7 @@ namespace {
     };
 
     constexpr HudText kNoText = { -1, "" };
+    constexpr HudText kTextMove = { 376, "MOVE" };
 
     // Indexed by `HudElementId`.
     const ElementInfo kElementInfos[static_cast<int>(HudElementId::Count)] = {
@@ -111,6 +115,8 @@ namespace {
         { {}, MuiIcon::Count, kNoText }, // Indicators
         { {}, MuiIcon::PartyOrders, { 160, "Party orders" } }, // PartyOrders (HUD state only)
         { { GameCommandType::Hud, kEventTacticalView }, MuiIcon::TacticalView, { 373, "Tactical view" } }, // TacticalView
+        { { GameCommandType::Hud, kEventAttack }, MuiIcon::Target, { 375, "ATTACK" } }, // Attack (MOVE with a tile selected)
+        { { GameCommandType::Hud, kEventNextTarget }, MuiIcon::Aim, { 377, "NEXT TARGET" } }, // NextTarget
     };
 
     // Orders of the Party Orders mod: the button presses the mod's hotkeys
@@ -348,6 +354,13 @@ namespace {
             return gCombatButtonsEnabled ? ButtonLook::Normal : ButtonLook::Disabled;
         case HudElementId::TacticalView:
             return tacticalViewIsOn() ? ButtonLook::Active : ButtonLook::Normal;
+        case HudElementId::Attack:
+            if (!gCombatButtonsEnabled || touchControlsGetConfirmableAction() == TOUCH_ACTION_NONE) {
+                return ButtonLook::Disabled;
+            }
+            return touchControlsGetConfirmableAction() == TOUCH_ACTION_ATTACK ? ButtonLook::Active : ButtonLook::Normal;
+        case HudElementId::NextTarget:
+            return gCombatButtonsEnabled ? ButtonLook::Normal : ButtonLook::Disabled;
         default:
             return ButtonLook::Normal;
         }
@@ -544,13 +557,19 @@ namespace {
 
         drawPanel(ui, rect, fill, border);
 
+        // The attack button walks to a selected tile.
+        HudText name = info.name;
+        if (id == HudElementId::Attack && touchControlsGetConfirmableAction() == TOUCH_ACTION_MOVE) {
+            name = kTextMove;
+        }
+
         float iconSize = std::min(rect.h * 0.5f, ui.dp(22.0f));
         float thickness = ui.dp(1.8f);
         if (rect.w > rect.h * 1.5f) {
             float iconX = rect.x + ui.dp(8.0f) + iconSize / 2.0f;
             muiDrawIcon(info.icon, iconX, rect.centerY(), iconSize * 0.8f, thickness, color);
             MuiRect labelRect = { iconX + iconSize / 2.0f + ui.dp(2.0f), rect.y, rect.right() - iconX - iconSize / 2.0f - ui.dp(4.0f), rect.h };
-            drawLabel(ui, labelRect, muiDecodeGameText(text(info.name)), color, 13.0f);
+            drawLabel(ui, labelRect, muiDecodeGameText(text(name)), color, 13.0f);
         } else {
             muiDrawIcon(info.icon, rect.centerX(), rect.centerY(), iconSize, thickness, color);
         }
@@ -1549,6 +1568,16 @@ bool touchHudHandleEvent(int eventCode)
         return true;
     case kEventTacticalView:
         tacticalViewToggle();
+        return true;
+    case kEventAttack:
+        if (interfaceBarEnabled()) {
+            touchControlsConfirmSelection();
+        }
+        return true;
+    case kEventNextTarget:
+        if (interfaceBarEnabled()) {
+            touchControlsSelectNextEnemy();
+        }
         return true;
     }
 

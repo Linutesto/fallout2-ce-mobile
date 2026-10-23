@@ -3,12 +3,14 @@
 #include <math.h>
 
 #include <algorithm>
+#include <vector>
 
 #include "action_log.h"
 #include "actions.h"
 #include "art.h"
 #include "color.h"
 #include "combat.h"
+#include "combat_ai.h"
 #include "critter.h"
 #include "dev_autotest.h"
 #include "draw.h"
@@ -34,13 +36,6 @@
 #include "world_view.h"
 
 namespace fallout {
-
-enum TouchAction {
-    TOUCH_ACTION_NONE,
-    TOUCH_ACTION_MOVE,
-    TOUCH_ACTION_USE,
-    TOUCH_ACTION_ATTACK,
-};
 
 static constexpr int kRadialMenuMaxItems = GAME_MOUSE_ACTION_MENU_ITEM_COUNT - 1;
 
@@ -132,6 +127,8 @@ static void touchControlsSetGameMouseMode(GameMouseMode mode);
 static TouchAction touchControlsGetActionAt(int worldX, int worldY, Object** targetPtr);
 static TouchAction touchControlsGetActionFor(Object* target, Object** targetPtr);
 static void touchControlsHandleTap(int x, int y);
+static void touchControlsSelect(TouchAction action, int tile, Object* target);
+static bool touchControlsIsSelectableEnemy(Object* critter);
 static void touchControlsSnapTap(int x, int y, int* tile, TouchAction* action, Object** target);
 static void touchControlsStickToSelection(int x, int y, int worldX, int worldY, int* tile, TouchAction* action, Object** target);
 static bool touchControlsGetBodyColumn(Object* critter, Rect* rect);
@@ -660,6 +657,13 @@ static void touchControlsHandleTap(int x, int y)
         return;
     }
 
+    touchControlsSelect(action, tile, target);
+}
+
+// Combat selection waiting for confirmation (a second tap or the HUD's
+// attack button).
+static void touchControlsSelect(TouchAction action, int tile, Object* target)
+{
     gPendingAction = action;
     gPendingTarget = target;
     gPendingTile = tile;
@@ -751,6 +755,89 @@ void touchControlsGetSelection(int* action, int* tile, Object** target)
     *action = gPendingAction;
     *tile = gPendingTile;
     *target = gPendingTarget;
+}
+
+TouchAction touchControlsGetConfirmableAction()
+{
+    if (!isInCombat()) {
+        return TOUCH_ACTION_NONE;
+    }
+
+    switch (gPendingAction) {
+    case TOUCH_ACTION_ATTACK:
+        return gPendingTarget != nullptr && touchControlsObjectExists(gPendingTarget) && !critterIsDead(gPendingTarget)
+            ? TOUCH_ACTION_ATTACK
+            : TOUCH_ACTION_NONE;
+    case TOUCH_ACTION_MOVE:
+        return gPendingTile != -1 ? TOUCH_ACTION_MOVE : TOUCH_ACTION_NONE;
+    default:
+        return TOUCH_ACTION_NONE;
+    }
+}
+
+bool touchControlsConfirmSelection()
+{
+    TouchAction action = touchControlsGetConfirmableAction();
+    if (action == TOUCH_ACTION_NONE) {
+        return false;
+    }
+
+    // As the second tap: the enemy stays selected for the next attack.
+    touchControlsPerform(action, gPendingTile, gPendingTarget);
+    if (action != TOUCH_ACTION_ATTACK) {
+        touchControlsClearSelection();
+    }
+    return true;
+}
+
+// An enemy the HUD's target button cycles through: what a tap would attack,
+// and in dude's sight (small critters like ants are hard to tap).
+static bool touchControlsIsSelectableEnemy(Object* critter)
+{
+    return critter != gDude
+        && (critter->flags & OBJECT_HIDDEN) == 0
+        && critter->elevation == gElevation
+        && !critterIsDead(critter)
+        && !objectIsPartyMember(critter)
+        && critter->data.critter.combat.team != gDude->data.critter.combat.team
+        && isWithinPerception(gDude, critter);
+}
+
+static std::vector<Object*> gEnemyCandidates;
+
+bool touchControlsSelectNextEnemy()
+{
+    if (!isInCombat() || gDude == nullptr) {
+        return false;
+    }
+
+    gEnemyCandidates.clear();
+    combatForEachCritter([](Object* critter) {
+        if (touchControlsIsSelectableEnemy(critter)) {
+            gEnemyCandidates.push_back(critter);
+        }
+    });
+    if (gEnemyCandidates.empty()) {
+        return false;
+    }
+
+    // Nearest first; again: the next one further away, then around.
+    std::stable_sort(gEnemyCandidates.begin(), gEnemyCandidates.end(), [](Object* a, Object* b) {
+        return objectGetDistanceBetween(gDude, a) < objectGetDistanceBetween(gDude, b);
+    });
+
+    size_t next = 0;
+    if (gPendingAction == TOUCH_ACTION_ATTACK) {
+        auto it = std::find(gEnemyCandidates.begin(), gEnemyCandidates.end(), gPendingTarget);
+        if (it != gEnemyCandidates.end()) {
+            next = (it - gEnemyCandidates.begin() + 1) % gEnemyCandidates.size();
+        }
+    }
+
+    Object* target = gEnemyCandidates[next];
+    actionLog("hud target:%s", actionLogObject(target));
+    touchControlsSelect(TOUCH_ACTION_ATTACK, target->tile, target);
+    return true;
 }
 
 // In combat a tap near the selection (tile or enemy) confirms it, whatever

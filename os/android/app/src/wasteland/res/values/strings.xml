@@ -1,0 +1,5 @@
+<resources>
+    <!-- Wasteland Reborn (the modded .debug app next to the official one):
+         a short name the launcher shows in full, and a green "AI" icon. -->
+    <string name="app_name">Wasteland</string>
+</resources>

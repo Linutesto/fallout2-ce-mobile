@@ -227,6 +227,12 @@ android {
     // a file or a folder).
     sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/bundledAssets'))
 
+    // The .debug app (debug and phone builds: Wasteland Reborn's, installed
+    // next to the official one) gets its own short name and green icon, so
+    // the two can be told apart on the launcher.
+    sourceSets.debug.res.srcDir('src/wasteland/res')
+    sourceSets.phone.res.srcDir('src/wasteland/res')
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8

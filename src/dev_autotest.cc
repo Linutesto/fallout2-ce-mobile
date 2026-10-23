@@ -701,6 +701,38 @@ static const DevAutotestStep kDevAutotestTacticalSteps[] = {
     { DEV_AUTOTEST_ACTION_CHECK_TACTICAL, 1, 1, 0, 1, "v21_shown_again" },
 };
 
+// Combat with the HUD's buttons only (enemies too small to tap): next target
+// selects the nearest enemy in sight, attack attacks it (AP go down) and
+// keeps it selected for the next attack.
+static const DevAutotestStep kDevAutotestHudAttackSteps[] = {
+    { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 30, "a00_map" },
+    // A spear (reach 2): a hit knocking the dude a tile back (RPU) leaves the
+    // enemy in reach.
+    { DEV_AUTOTEST_ACTION_EQUIP_ITEM, 7, HAND_LEFT, 0, 10, "a00b_spear" },
+    { DEV_AUTOTEST_ACTION_START_COMBAT, 0, 0, 0, 60, "a01_combat" },
+    { DEV_AUTOTEST_ACTION_KEEP_COMBAT, 0, 0, 0, 1, "a02_keep_combat" },
+    { DEV_AUTOTEST_ACTION_END_TURN_WAIT, 900, 0, 0, 30, "a04_dude_turn" },
+    { DEV_AUTOTEST_ACTION_LOG_COMBAT, 0, 0, 0, 1, "a05_before" },
+    { DEV_AUTOTEST_ACTION_CHECK_SELECTION, 0, 0, 0, 1, "a06_nothing_selected" },
+    { DEV_AUTOTEST_ACTION_HUD_TAP, HUD_ELEMENT(NextTarget), 0, 0, 20, "a07_next_target" },
+    { DEV_AUTOTEST_ACTION_CHECK_SELECTION, 3, 0, 0, 1, "a08_enemy_selected" },
+    // Not in reach: the game's "out of range", as a tap.
+    { DEV_AUTOTEST_ACTION_HUD_TAP, HUD_ELEMENT(Attack), 0, 0, 60, "a09_attack_out_of_range" },
+    { DEV_AUTOTEST_ACTION_CHECK_SELECTION, 3, 0, 0, 1, "a10_still_selected" },
+    // A tile next to it selected: the button walks there (MOVE).
+    { DEV_AUTOTEST_ACTION_TOUCH_TAP_NEAR_CRITTER, 0, 0, 0, 20, "a11_tile_selected" },
+    { DEV_AUTOTEST_ACTION_CHECK_SELECTION, 1, 0, 0, 1, "a12_move_selected" },
+    { DEV_AUTOTEST_ACTION_HUD_TAP, HUD_ELEMENT(Attack), 0, 0, 150, "a13_move" },
+    { DEV_AUTOTEST_ACTION_LOG_COMBAT, 0, 0, 0, 1, "a14_after_move" },
+    // Next to it, the next turn (all AP): target again, the attack costs AP.
+    { DEV_AUTOTEST_ACTION_END_TURN_WAIT, 900, 0, 0, 30, "a14b_next_turn" },
+    { DEV_AUTOTEST_ACTION_LOG_COMBAT, 0, 0, 0, 1, "a14c_full_ap" },
+    { DEV_AUTOTEST_ACTION_HUD_TAP, HUD_ELEMENT(NextTarget), 0, 0, 20, "a15_next_target" },
+    { DEV_AUTOTEST_ACTION_CHECK_SELECTION, 3, 0, 0, 1, "a16_enemy_selected" },
+    { DEV_AUTOTEST_ACTION_HUD_TAP, HUD_ELEMENT(Attack), 0, 0, 150, "a17_attack" },
+    { DEV_AUTOTEST_ACTION_LOG_COMBAT, 0, 0, 0, 1, "a18_after_attack" },
+};
+
 // Combat: the critter picked (its outline pulses: two frames apart), then a
 // tile behind it, partly covered by its sprite, chosen by a tap where it
 // shows (the critter's selection doesn't keep it) and confirmed by a tap
@@ -3204,6 +3236,9 @@ void devAutotestSetScenario(const char* name)
     } else if (strcmp(name, "behindcritter") == 0) {
         gDevAutotestSteps = kDevAutotestBehindCritterSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestBehindCritterSteps) / sizeof(kDevAutotestBehindCritterSteps[0]);
+    } else if (strcmp(name, "hudattack") == 0) {
+        gDevAutotestSteps = kDevAutotestHudAttackSteps;
+        gDevAutotestStepCount = sizeof(kDevAutotestHudAttackSteps) / sizeof(kDevAutotestHudAttackSteps[0]);
     } else if (strcmp(name, "magnet") == 0) {
         gDevAutotestSteps = kDevAutotestMagnetSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestMagnetSteps) / sizeof(kDevAutotestMagnetSteps[0]);

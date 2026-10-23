@@ -25,6 +25,14 @@ struct Object;
 // neither a visible cursor nor a cursor warp is needed for map actions.
 // With touch-native input there's no mouse at all (`touchControlsIsNative`).
 
+// What a tap on the map does.
+enum TouchAction {
+    TOUCH_ACTION_NONE,
+    TOUCH_ACTION_MOVE,
+    TOUCH_ACTION_USE,
+    TOUCH_ACTION_ATTACK,
+};
+
 bool touchControlsIsEnabled();
 
 // Touch-native input: the mobile UI owns every screen and touch controls the
@@ -73,6 +81,18 @@ void touchControlsReset();
 // The combat selection waiting for confirmation (autotests): its action
 // (TouchAction), tile and target.
 void touchControlsGetSelection(int* action, int* tile, Object** target);
+
+// In combat, the selection a second tap would confirm: TOUCH_ACTION_ATTACK
+// (a living enemy), TOUCH_ACTION_MOVE or TOUCH_ACTION_NONE.
+TouchAction touchControlsGetConfirmableAction();
+
+// HUD's attack button: does what a second tap on the selection does. False
+// without one.
+bool touchControlsConfirmSelection();
+
+// HUD's target button: selects the nearest enemy in sight, then the next one
+// further away on each press. False when there are none.
+bool touchControlsSelectNextEnemy();
 
 int touchControlsChooseActionMenuItem(const GameMouseActionMenuItem* items, int itemsLength, int x, int y);
 

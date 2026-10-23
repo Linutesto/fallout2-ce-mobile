@@ -283,6 +283,12 @@
 {373}{}{Tactical view}
 {374}{}{Combat button: see-through figures, tiles and where you can walk}
 
+# Combat buttons of the touch HUD: attack the selected enemy (or walk to the
+# selected tile) and select the next enemy in sight.
+{375}{}{ATTACK}
+{376}{}{MOVE}
+{377}{}{NEXT TARGET}
+
 # The message when a party member or another critter cannot pick up an item
 # (the player's message is 905 in proto.msg).
 {1000}{}{%s cannot pick up the item.}

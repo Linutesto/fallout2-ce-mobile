@@ -44,7 +44,7 @@ enum class HudGroupId {
     Screens, // inventory, character, Pip-Boy, map
     Tools, // skills, highlight, sneak
     Log, // message log button
-    Combat, // end turn, end combat
+    Combat, // attack, next target, tactical view, end turn, end combat
     Weapon, // status, attack modes, swap hands, weapon
     Indicators, // SNEAK, LEVEL, POISONED, ...
     Count,
@@ -73,6 +73,10 @@ enum class HudElementId {
     PartyOrders,
     // Combat's tactical view (tactical_view.h).
     TacticalView,
+    // Combat: attack the selected enemy / walk to the selected tile (the
+    // second tap), select the next enemy in sight.
+    Attack,
+    NextTarget,
     Count,
 };
 
