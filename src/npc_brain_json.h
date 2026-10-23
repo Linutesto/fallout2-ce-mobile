@@ -1,6 +1,7 @@
 #ifndef FALLOUT_NPC_BRAIN_JSON_H_
 #define FALLOUT_NPC_BRAIN_JSON_H_
 #include <cstdio>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -47,6 +48,9 @@ namespace fallout { namespace brainJson {
 
         bool parse(JsonValue* value)
         {
+            if (value == nullptr || text_.size() > 256 * 1024) return false;
+            *value = JsonValue();
+            pos_ = 0;
             if (!parseValue(value, 0)) {
                 return false;
             }
@@ -258,13 +262,30 @@ namespace fallout { namespace brainJson {
                 value->type = JsonValue::Type::Null;
                 return true;
             } else if (ch == '-' || (ch >= '0' && ch <= '9')) {
-                const char* start = text_.c_str() + pos_;
-                char* end = nullptr;
-                double number = strtod(start, &end);
-                if (end == start) {
-                    return false;
+                // CE: strtod alone accepts non-JSON numbers (01, 1., hex, infinity).
+                size_t begin = pos_;
+                if (text_[pos_] == '-') pos_++;
+                if (pos_ >= text_.size()) return false;
+                if (text_[pos_] == '0') pos_++;
+                else {
+                    if (text_[pos_] < '1' || text_[pos_] > '9') return false;
+                    while (pos_ < text_.size() && text_[pos_] >= '0' && text_[pos_] <= '9') pos_++;
                 }
-                pos_ += end - start;
+                if (pos_ < text_.size() && text_[pos_] == '.') {
+                    size_t digits = ++pos_;
+                    while (pos_ < text_.size() && text_[pos_] >= '0' && text_[pos_] <= '9') pos_++;
+                    if (digits == pos_) return false;
+                }
+                if (pos_ < text_.size() && (text_[pos_] == 'e' || text_[pos_] == 'E')) {
+                    pos_++;
+                    if (pos_ < text_.size() && (text_[pos_] == '+' || text_[pos_] == '-')) pos_++;
+                    size_t digits = pos_;
+                    while (pos_ < text_.size() && text_[pos_] >= '0' && text_[pos_] <= '9') pos_++;
+                    if (digits == pos_) return false;
+                }
+                std::string token = text_.substr(begin, pos_ - begin);
+                double number = strtod(token.c_str(), nullptr);
+                if (!std::isfinite(number)) return false;
                 value->type = JsonValue::Type::Number;
                 value->number = number;
                 return true;
