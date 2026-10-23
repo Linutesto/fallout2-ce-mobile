@@ -1,7 +1,7 @@
 #ifndef FALLOUT_NPC_STORY_H_
 #define FALLOUT_NPC_STORY_H_
-#include "npc_brain.h"
 #include "db.h"
+#include "npc_brain.h"
 namespace fallout {
 struct Object;
 void npcStoryReset();
@@ -15,5 +15,5 @@ const NpcBrainTimeline& npcStoryTimeline();
 bool npcStoryAbandon(const std::string& id);
 bool npcStorySave();
 void npcStoryLoad();
-}
+} // namespace fallout
 #endif

@@ -945,6 +945,8 @@ if(UNIX AND NOT ANDROID AND NOT IOS AND NOT CMAKE_SYSTEM_NAME MATCHES "Emscripte
     function(ce_add_test name)
         add_executable(${name} EXCLUDE_FROM_ALL "tests/${name}.cc" ${ARGN})
         target_include_directories(${name} PRIVATE "src")
+        # CE: Assertions are the test harness, including RelWithDebInfo builds.
+        target_compile_options(${name} PRIVATE -UNDEBUG)
         add_test(NAME ${name} COMMAND ${name})
     endfunction()
 

@@ -77,6 +77,8 @@ void (*gDevAutotestInvenWieldObserver)(Object* critter, Object* item, int isWiel
 enum DevAutotestAction {
     DEV_AUTOTEST_ACTION_NONE,
     DEV_AUTOTEST_ACTION_STORY,
+    DEV_AUTOTEST_ACTION_STORY_REAL,
+    DEV_AUTOTEST_ACTION_STORY_GUARDS,
     DEV_AUTOTEST_ACTION_ZOOM,
     DEV_AUTOTEST_ACTION_ZOOM_AT_DUDE,
     DEV_AUTOTEST_ACTION_PAN,
@@ -1651,6 +1653,8 @@ static const DevAutotestStep kDevAutotestPcPartySteps[] = {
 // lines are typed in pieces.
 // CE: Real engine inventory, barter, map and save/load over a scripted HTTP brain.
 static const DevAutotestStep kDevAutotestStorySteps[] = {
+    { DEV_AUTOTEST_ACTION_KEY, SDL_SCANCODE_ESCAPE, 0, 0, 10, "w00_skip_movie" },
+    { DEV_AUTOTEST_ACTION_WAIT_MAP_LOADED, 1200, 0, 0, 90, "w00_loaded" },
     { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 30, "w00_map" },
     { DEV_AUTOTEST_ACTION_STORY, 0, 0, 0, 10, "w01_setup" },
     { DEV_AUTOTEST_ACTION_STORY, 1, 0, 0, 10, "w02_discount_gift" },
@@ -1662,9 +1666,39 @@ static const DevAutotestStep kDevAutotestStorySteps[] = {
     { DEV_AUTOTEST_ACTION_STORY, 5, 0, 0, 10, "w08_fork" },
     { DEV_AUTOTEST_ACTION_COMMAND, static_cast<int>(GameCommandType::Pipboy), 0, 0, 30, "w09_pipboy" },
     { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "w10_journal", "pipboy.section.journal" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "w10b_active", "pipboy.journal.1" },
     { DEV_AUTOTEST_ACTION_CHECK_WIDGET, 1, 0, 0, 1, "w11_abandon_available", "pipboy.journal.abandon" },
     { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "w12_abandon", "pipboy.journal.abandon" },
     { DEV_AUTOTEST_ACTION_STORY, 6, 0, 0, 10, "w13_abandoned" },
+};
+
+// CE: Uses the real local Qwen brain and the actual free-talk dialog first.
+static const DevAutotestStep kDevAutotestStoryGuardSteps[] = {
+    { DEV_AUTOTEST_ACTION_KEY, SDL_SCANCODE_ESCAPE, 0, 0, 10, "g00_skip_movie" },
+    { DEV_AUTOTEST_ACTION_WAIT_MAP_LOADED, 1800, 0, 0, 60, "g00_loaded" },
+    { DEV_AUTOTEST_ACTION_STORY_GUARDS, 0, 0, 0, 30, "g01_fixture" },
+    { DEV_AUTOTEST_ACTION_STORY_GUARDS, 1, 0, 0, 30, "g02_guards" },
+    { DEV_AUTOTEST_ACTION_STORY_GUARDS, 2, 0, 0, 30, "g03_native_combat" },
+};
+
+static const DevAutotestStep kDevAutotestStoryRealSteps[] = {
+    { DEV_AUTOTEST_ACTION_KEY, SDL_SCANCODE_ESCAPE, 0, 0, 10, "r00_skip_movie" },
+    { DEV_AUTOTEST_ACTION_WAIT_MAP_LOADED, 1800, 0, 0, 60, "r00_loaded" },
+    { DEV_AUTOTEST_ACTION_STORY_REAL, 0, 0, 0, 30, "r01_fixture" },
+    { DEV_AUTOTEST_ACTION_TALK_PARTY_MEMBER, 62, 0, 0, 60, "r02_talk" },
+    { DEV_AUTOTEST_ACTION_WAIT_TALKING, 600, 0, 0, 30, "r03_talking" },
+    { DEV_AUTOTEST_ACTION_CHOOSE_FREE_TALK, 0, 0, 0, 20, "r04_free_talk" },
+    { DEV_AUTOTEST_ACTION_TYPE_TEXT, 0, 0, 0, 2, "r05_type", "Give me a job to fetch " },
+    { DEV_AUTOTEST_ACTION_TYPE_TEXT, 0, 0, 0, 2, "r05b_type", "you one rock for 10 caps " },
+    { DEV_AUTOTEST_ACTION_TYPE_TEXT, 0, 0, 0, 2, "r05c_type", "and 5 XP. I will bring it back." },
+    { DEV_AUTOTEST_ACTION_KEY, SDL_SCANCODE_RETURN, 0, 0, 10, "r06_said" },
+    { DEV_AUTOTEST_ACTION_WAIT_FREE_TALK, 14000, 0, 0, 30, "r07_reply" },
+    { DEV_AUTOTEST_ACTION_STORY_REAL, 1, 0, 0, 30, "r08_earned" },
+    { DEV_AUTOTEST_ACTION_BACK, 0, 0, 0, 60, "r09_exit_dialog" },
+    { DEV_AUTOTEST_ACTION_SAVE_GAME, 7, 0, 0, 30, "r10_saved", "Real story rewind" },
+    { DEV_AUTOTEST_ACTION_STORY_REAL, 2, 0, 0, 30, "r11_secret" },
+    { DEV_AUTOTEST_ACTION_LOAD_GAME, 7, 0, 0, 120, "r12_loaded" },
+    { DEV_AUTOTEST_ACTION_STORY_REAL, 3, 0, 0, 30, "r13_recall" },
 };
 
 static const DevAutotestStep kDevAutotestFreeTalkSteps[] = {
@@ -2938,7 +2972,13 @@ static void devAutotestPrepareSaves()
 
 void devAutotestSetScenario(const char* name)
 {
-    if (strcmp(name, "story") == 0) {
+    if (strcmp(name, "story-guards") == 0) {
+        gDevAutotestSteps = kDevAutotestStoryGuardSteps;
+        gDevAutotestStepCount = sizeof(kDevAutotestStoryGuardSteps) / sizeof(kDevAutotestStoryGuardSteps[0]);
+    } else if (strcmp(name, "story-real") == 0) {
+        gDevAutotestSteps = kDevAutotestStoryRealSteps;
+        gDevAutotestStepCount = sizeof(kDevAutotestStoryRealSteps) / sizeof(kDevAutotestStoryRealSteps[0]);
+    } else if (strcmp(name, "story") == 0) {
         gDevAutotestSteps = kDevAutotestStorySteps;
         gDevAutotestStepCount = sizeof(kDevAutotestStorySteps) / sizeof(kDevAutotestStorySteps[0]);
     } else if (strcmp(name, "worldmap") == 0) {
@@ -3521,6 +3561,14 @@ void devAutotestTick()
         }
         devAutotestPinchTick(step);
         return;
+    }
+
+    if (step->action == DEV_AUTOTEST_ACTION_STORY_GUARDS && !gDevAutotestStepStarted) {
+        if (!devStoryGuardTestTick(static_cast<int>(step->a))) return;
+    }
+
+    if (step->action == DEV_AUTOTEST_ACTION_STORY_REAL && !gDevAutotestStepStarted) {
+        if (!devStoryRealTestTick(static_cast<int>(step->a))) return;
     }
 
     if (step->action == DEV_AUTOTEST_ACTION_STORY && !gDevAutotestStepStarted) {

@@ -1,13 +1,14 @@
 #ifndef FALLOUT_NPC_BRAIN_JSON_H_
 #define FALLOUT_NPC_BRAIN_JSON_H_
-#include <cstdio>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
-#include <vector>
 #include <utility>
-namespace fallout { namespace brainJson {
+#include <vector>
+namespace fallout {
+namespace brainJson {
     struct JsonValue {
         enum class Type {
             Null,
@@ -266,21 +267,25 @@ namespace fallout { namespace brainJson {
                 size_t begin = pos_;
                 if (text_[pos_] == '-') pos_++;
                 if (pos_ >= text_.size()) return false;
-                if (text_[pos_] == '0') pos_++;
+                if (text_[pos_] == '0')
+                    pos_++;
                 else {
                     if (text_[pos_] < '1' || text_[pos_] > '9') return false;
-                    while (pos_ < text_.size() && text_[pos_] >= '0' && text_[pos_] <= '9') pos_++;
+                    while (pos_ < text_.size() && text_[pos_] >= '0' && text_[pos_] <= '9')
+                        pos_++;
                 }
                 if (pos_ < text_.size() && text_[pos_] == '.') {
                     size_t digits = ++pos_;
-                    while (pos_ < text_.size() && text_[pos_] >= '0' && text_[pos_] <= '9') pos_++;
+                    while (pos_ < text_.size() && text_[pos_] >= '0' && text_[pos_] <= '9')
+                        pos_++;
                     if (digits == pos_) return false;
                 }
                 if (pos_ < text_.size() && (text_[pos_] == 'e' || text_[pos_] == 'E')) {
                     pos_++;
                     if (pos_ < text_.size() && (text_[pos_] == '+' || text_[pos_] == '-')) pos_++;
                     size_t digits = pos_;
-                    while (pos_ < text_.size() && text_[pos_] >= '0' && text_[pos_] <= '9') pos_++;
+                    while (pos_ < text_.size() && text_[pos_] >= '0' && text_[pos_] <= '9')
+                        pos_++;
                     if (digits == pos_) return false;
                 }
                 std::string token = text_.substr(begin, pos_ - begin);
@@ -358,5 +363,6 @@ namespace fallout { namespace brainJson {
         out += ']';
     }
 
-} }
+} // namespace brainJson
+} // namespace fallout
 #endif

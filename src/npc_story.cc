@@ -6,17 +6,19 @@
 
 #include "character_editor.h"
 #include "combat.h"
+#include "config.h"
 #include "critter.h"
 #include "db.h"
 #include "debug.h"
 #include "game.h"
+#include "game_config.h"
 #include "item.h"
 #include "object.h"
 #include "party_member.h"
 #include "pipboy.h"
 #include "proto.h"
-#include "sfall_filesystem.h"
 #include "scripts.h"
+#include "sfall_filesystem.h"
 #include "stat.h"
 #include "worldmap.h"
 
@@ -63,7 +65,8 @@ namespace {
 
     int findArea(const std::string& name)
     {
-        for (int i = 0; i < wmAreaMaxCount(); i++) if (areaName(i) == name) return i;
+        for (int i = 0; i < wmAreaMaxCount(); i++)
+            if (areaName(i) == name) return i;
         return -1;
     }
 
@@ -75,7 +78,8 @@ namespace {
         char line[304];
         while (names.size() < 64 && fileReadString(line, sizeof(line), file) != nullptr) {
             std::string name = line;
-            while (!name.empty() && (name.back() == '\r' || name.back() == '\n')) name.pop_back();
+            while (!name.empty() && (name.back() == '\r' || name.back() == '\n'))
+                name.pop_back();
             if (!name.empty() && name[0] != '#' && findArea(name) != -1
                 && std::find(names.begin(), names.end(), name) == names.end()) names.push_back(name);
         }
@@ -132,8 +136,10 @@ namespace {
     bool saveKey(const char* key, const std::string& json)
     {
         int id = sfallFileSystemFind(key);
-        if (id == -1) id = sfallFileSystemCreate(key, json.size());
-        else sfallFileSystemResize(id, json.size());
+        if (id == -1)
+            id = sfallFileSystemCreate(key, json.size());
+        else
+            sfallFileSystemResize(id, json.size());
         if (id == -1 || sfallFileSystemSize(id) != static_cast<int>(json.size())) return false;
         sfallFileSystemSeek(id, 0);
         sfallFileSystemWriteString(id, json.c_str(), false);
@@ -148,10 +154,11 @@ namespace {
         if (id < 0 || size < 1 || size > 256 * 1024) return {};
         sfallFileSystemSeek(id, 0);
         std::string json;
-        for (int i = 0; i < size; i++) json += static_cast<char>(sfallFileSystemRead(id, 1));
+        for (int i = 0; i < size; i++)
+            json += static_cast<char>(sfallFileSystemRead(id, 1));
         return json;
     }
-}
+} // namespace
 
 void npcStoryReset()
 {
@@ -170,12 +177,16 @@ int npcStoryDiscount(Object* npc)
 {
     if (npc == nullptr) return 0;
     std::string id = identity(npc);
-    for (const auto& d : state.discounts) if (d.npc == id) return d.percent;
+    for (const auto& d : state.discounts)
+        if (d.npc == id) return d.percent;
     return 0;
 }
 
 double npcStoryPriceMultiplier(Object* npc)
 {
+    bool enabled = false;
+    configGetBool(&gGameConfig, "ai", "enabled", &enabled, false);
+    if (!enabled) return 1.0;
     return (100 - npcStoryDiscount(npc)) * 0.01;
 }
 
@@ -184,10 +195,11 @@ const NpcBrainTimeline& npcStoryTimeline() { return timeline; }
 
 bool npcStoryAbandon(const std::string& id)
 {
-    for (auto& q : state.quests) if (q.id == id && q.state == "active") {
-        q.state = "abandoned";
-        return true;
-    }
+    for (auto& q : state.quests)
+        if (q.id == id && q.state == "active") {
+            q.state = "abandoned";
+            return true;
+        }
     return false;
 }
 
@@ -199,7 +211,8 @@ void npcStoryFillRequest(Object* npc, NpcBrainRequest* request)
     // CE: The Pip-Boy owns display/completion thresholds, including conversions.
     pipboyFillStoryQuests(&story);
     characterEditorFillStory(&story);
-    for (KillType type = KILL_TYPE_FIRST; type < KILL_TYPE_DEFAULT_COUNT; type++) story.killsTotal += killsGetByType(type);
+    for (KillType type = KILL_TYPE_FIRST; type < KILL_TYPE_DEFAULT_COUNT; type++)
+        story.killsTotal += killsGetByType(type);
     story.killsMen = killsGetByType(KILL_TYPE_MAN);
     story.killsWomen = killsGetByType(KILL_TYPE_WOMAN);
     story.killsChildren = killsGetByType(KILL_TYPE_CHILD);
@@ -212,7 +225,8 @@ void npcStoryFillRequest(Object* npc, NpcBrainRequest* request)
     story.gameTicks = gameTimeGetTime();
     story.npcTeam = npc->data.critter.combat.team;
     story.discountPercent = npcStoryDiscount(npc);
-    for (const auto& q : state.quests) if (q.state == "active" && story.wastelandQuests.size() < 64) story.wastelandQuests.push_back(q);
+    for (const auto& q : state.quests)
+        if (q.state == "active" && story.wastelandQuests.size() < 64) story.wastelandQuests.push_back(q);
 }
 
 std::vector<std::string> npcStoryApplyResponse(Object* npc, const NpcBrainResponse& response)
@@ -236,21 +250,23 @@ std::vector<std::string> npcStoryApplyResponse(Object* npc, const NpcBrainRespon
             if (it == state.discounts.end()) {
                 if (state.discounts.size() >= 128) continue;
                 state.discounts.push_back({ id, effect.percent });
-            } else it->percent = std::max(it->percent, effect.percent);
+            } else
+                it->percent = std::max(it->percent, effect.percent);
             messages.push_back(std::string(critterGetName(npc)) + " offers a " + std::to_string(npcStoryDiscount(npc)) + "% discount.");
         } else if (effect.type == "gift" && effect.quantity > 0) {
-            for (const auto& item : bounds.gifts) if (item.pid == effect.pid && effect.quantity <= item.quantity) {
-                Object* obj = inventoryItem(npc, effect.pid, effect.quantity);
-                int budget = 50 * std::min(std::max(pcGetStat(PC_STAT_LEVEL), 1), 99);
-                int cost = obj != nullptr ? itemStackCost(obj, effect.quantity) : -1;
-                if (cost < 0 || cost > budget - giftSpent) break;
-                std::string name = objectGetName(obj);
-                if (itemMove(npc, gDude, obj, effect.quantity) == 0) {
-                    giftSpent += cost;
-                    messages.push_back(std::string(critterGetName(npc)) + " gives you " + std::to_string(effect.quantity) + " " + name + ".");
+            for (const auto& item : bounds.gifts)
+                if (item.pid == effect.pid && effect.quantity <= item.quantity) {
+                    Object* obj = inventoryItem(npc, effect.pid, effect.quantity);
+                    int budget = 50 * std::min(std::max(pcGetStat(PC_STAT_LEVEL), 1), 99);
+                    int cost = obj != nullptr ? itemStackCost(obj, effect.quantity) : -1;
+                    if (cost < 0 || cost > budget - giftSpent) break;
+                    std::string name = objectGetName(obj);
+                    if (itemMove(npc, gDude, obj, effect.quantity) == 0) {
+                        giftSpent += cost;
+                        messages.push_back(std::string(critterGetName(npc)) + " gives you " + std::to_string(effect.quantity) + " " + name + ".");
+                    }
+                    break;
                 }
-                break;
-            }
         } else if (effect.type == "reveal_location" && contains(bounds.revealLocations, effect.name)) {
             int area = findArea(effect.name);
             if (area != -1 && wmAreaSetVisibleState(static_cast<City>(area), CITY_STATE_KNOWN, false)
@@ -261,42 +277,54 @@ std::vector<std::string> npcStoryApplyResponse(Object* npc, const NpcBrainRespon
         } else if (effect.type == "side_quest" && bounds.sideQuest && !effect.title.empty() && !effect.objective.empty()
             && effect.rewardCaps >= 0 && effect.rewardCaps <= bounds.maxCaps && effect.rewardXp >= 0 && effect.rewardXp <= bounds.maxXp) {
             bool valid = effect.kind == "visit" && contains(bounds.visitLocations, effect.location);
-            for (const auto& item : bounds.fetchItems) if (effect.kind == "fetch" && effect.pid == item.pid && effect.quantity >= 1 && effect.quantity <= 10) valid = true;
+            for (const auto& item : bounds.fetchItems)
+                if (effect.kind == "fetch" && effect.pid == item.pid && effect.quantity >= 1 && effect.quantity <= 10) valid = true;
             if (!valid) continue;
             WastelandQuest q;
-            q.id = "q-" + std::to_string(++state.questCounter); q.giver = id; q.giverName = critterGetName(npc);
-            q.title = npcBrainSanitize(effect.title, 60); q.objective = npcBrainSanitize(effect.objective, 200);
-            q.kind = effect.kind; q.location = effect.location; q.pid = effect.pid; q.quantity = effect.quantity;
-            q.rewardCaps = effect.rewardCaps; q.rewardXp = effect.rewardXp;
+            q.id = "q-" + std::to_string(++state.questCounter);
+            q.giver = id;
+            q.giverName = critterGetName(npc);
+            q.title = npcBrainSanitize(effect.title, 60);
+            q.objective = npcBrainSanitize(effect.objective, 200);
+            q.kind = effect.kind;
+            q.location = effect.location;
+            q.pid = effect.pid;
+            q.quantity = effect.quantity;
+            q.rewardCaps = effect.rewardCaps;
+            q.rewardXp = effect.rewardXp;
             state.quests.push_back(q);
             messages.push_back("New quest: " + q.title + ".");
         } else if (effect.type == "complete_quest" && contains(bounds.completeQuests, effect.id)) {
-            for (auto& q : state.quests) if (q.id == effect.id && q.giver == id && requirement(q)) {
-                // CE: Move the fetch to its giver with the inventory API, never modify quest scripts.
-                if (q.kind == "fetch") {
-                    Object* item = inventoryItem(gDude, q.pid, q.quantity);
-                    if (item == nullptr || itemMoveForce(gDude, npc, item, q.quantity) != 0) break;
-                }
-                if (itemCapsAdjust(gDude, q.rewardCaps) != 0) {
+            for (auto& q : state.quests)
+                if (q.id == effect.id && q.giver == id && requirement(q)) {
+                    // CE: Move the fetch to its giver with the inventory API, never modify quest scripts.
                     if (q.kind == "fetch") {
-                        Object* item = inventoryItem(npc, q.pid, q.quantity);
-                        if (item != nullptr) itemMoveForce(npc, gDude, item, q.quantity);
+                        Object* item = inventoryItem(gDude, q.pid, q.quantity);
+                        if (item == nullptr || itemMoveForce(gDude, npc, item, q.quantity) != 0) break;
                     }
+                    if (itemCapsAdjust(gDude, q.rewardCaps) != 0) {
+                        if (q.kind == "fetch") {
+                            Object* item = inventoryItem(npc, q.pid, q.quantity);
+                            if (item != nullptr) itemMoveForce(npc, gDude, item, q.quantity);
+                        }
+                        break;
+                    }
+                    q.state = "done";
+                    pcAddExperience(q.rewardXp);
+                    messages.push_back("Quest completed: " + q.title + ". +" + std::to_string(q.rewardCaps) + " caps, +" + std::to_string(q.rewardXp) + " XP.");
                     break;
                 }
-                q.state = "done";
-                pcAddExperience(q.rewardXp);
-                messages.push_back("Quest completed: " + q.title + ". +" + std::to_string(q.rewardCaps) + " caps, +" + std::to_string(q.rewardXp) + " XP.");
-                break;
-            }
         } else if (effect.type == "turn_hostile" && bounds.turnHostile && twiceHostile && critterIsActive(gDude)) {
             CombatStartData combat = {};
-            combat.attacker = npc; combat.defender = gDude; combat.maxDamage = INT_MAX;
+            combat.attacker = npc;
+            combat.defender = gDude;
+            combat.maxDamage = INT_MAX;
             scriptsRequestCombat(&combat);
             messages.push_back(std::string(critterGetName(npc)) + " attacks!");
         }
     }
-    for (const auto& msg : messages) debugPrint("\nWasteland: %s\n", msg.c_str());
+    for (const auto& msg : messages)
+        debugPrint("\nWasteland: %s\n", msg.c_str());
     return messages;
 }
 
