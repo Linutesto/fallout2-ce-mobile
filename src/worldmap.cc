@@ -1119,6 +1119,12 @@ static void wmResetTrailMarkers()
     trailMarkerState.remainingSpacing = 0;
 }
 
+// CE: Iterate content-defined areas, including unknown ones, without fixed FO2 IDs.
+int wmAreaMaxCount()
+{
+    return wmMaxAreaNum;
+}
+
 bool cityIsValid(int city)
 {
     return city >= CITY_FIRST && city < wmMaxAreaNum;

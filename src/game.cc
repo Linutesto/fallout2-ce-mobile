@@ -1,3 +1,4 @@
+#include "npc_story.h"
 #include "game.h"
 #include "platform/git_version.h"
 
@@ -496,6 +497,7 @@ void gameReset()
     sfall_gl_scr_reset();
     sfall_ini_cache_clear();
     sfallOnGameReset();
+    npcStoryReset();
     gGameLoaded = false;
 }
 

@@ -1,4 +1,5 @@
 #include "dev_autotest.h"
+#include "dev_story_test.h"
 
 #include <limits.h>
 #include <stdarg.h>
@@ -75,6 +76,7 @@ void (*gDevAutotestInvenWieldObserver)(Object* critter, Object* item, int isWiel
 
 enum DevAutotestAction {
     DEV_AUTOTEST_ACTION_NONE,
+    DEV_AUTOTEST_ACTION_STORY,
     DEV_AUTOTEST_ACTION_ZOOM,
     DEV_AUTOTEST_ACTION_ZOOM_AT_DUDE,
     DEV_AUTOTEST_ACTION_PAN,
@@ -1647,6 +1649,24 @@ static const DevAutotestStep kDevAutotestPcPartySteps[] = {
 // the party), through the NPC brain ([ai] in fallout2.cfg). Works with the
 // game's windows and with the mobile UI. SDL text events take 31 bytes: the
 // lines are typed in pieces.
+// CE: Real engine inventory, barter, map and save/load over a scripted HTTP brain.
+static const DevAutotestStep kDevAutotestStorySteps[] = {
+    { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 30, "w00_map" },
+    { DEV_AUTOTEST_ACTION_STORY, 0, 0, 0, 10, "w01_setup" },
+    { DEV_AUTOTEST_ACTION_STORY, 1, 0, 0, 10, "w02_discount_gift" },
+    { DEV_AUTOTEST_ACTION_STORY, 2, 0, 0, 10, "w03_reveal_quest" },
+    { DEV_AUTOTEST_ACTION_STORY, 3, 0, 0, 10, "w04_completed" },
+    { DEV_AUTOTEST_ACTION_SAVE_GAME, 8, 0, 0, 30, "w05_saved", "Wasteland story test" },
+    { DEV_AUTOTEST_ACTION_STORY, 4, 0, 0, 10, "w06_post_save" },
+    { DEV_AUTOTEST_ACTION_LOAD_GAME, 8, 0, 0, 90, "w07_loaded" },
+    { DEV_AUTOTEST_ACTION_STORY, 5, 0, 0, 10, "w08_fork" },
+    { DEV_AUTOTEST_ACTION_COMMAND, static_cast<int>(GameCommandType::Pipboy), 0, 0, 30, "w09_pipboy" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "w10_journal", "pipboy.section.journal" },
+    { DEV_AUTOTEST_ACTION_CHECK_WIDGET, 1, 0, 0, 1, "w11_abandon_available", "pipboy.journal.abandon" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "w12_abandon", "pipboy.journal.abandon" },
+    { DEV_AUTOTEST_ACTION_STORY, 6, 0, 0, 10, "w13_abandoned" },
+};
+
 static const DevAutotestStep kDevAutotestFreeTalkSteps[] = {
     { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 30, "f00_start" },
     { DEV_AUTOTEST_ACTION_LOAD_GAME, 9, 0, 0, 120, "f01_loaded" },
@@ -2918,7 +2938,10 @@ static void devAutotestPrepareSaves()
 
 void devAutotestSetScenario(const char* name)
 {
-    if (strcmp(name, "worldmap") == 0) {
+    if (strcmp(name, "story") == 0) {
+        gDevAutotestSteps = kDevAutotestStorySteps;
+        gDevAutotestStepCount = sizeof(kDevAutotestStorySteps) / sizeof(kDevAutotestStorySteps[0]);
+    } else if (strcmp(name, "worldmap") == 0) {
         gDevAutotestSteps = kDevAutotestWorldmapSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestWorldmapSteps) / sizeof(kDevAutotestWorldmapSteps[0]);
     } else if (strcmp(name, "loadsave") == 0) {
@@ -3498,6 +3521,10 @@ void devAutotestTick()
         }
         devAutotestPinchTick(step);
         return;
+    }
+
+    if (step->action == DEV_AUTOTEST_ACTION_STORY && !gDevAutotestStepStarted) {
+        if (!devStoryTestTick(static_cast<int>(step->a))) return;
     }
 
     if (step->action == DEV_AUTOTEST_ACTION_WAIT_FREE_TALK && !gDevAutotestStepStarted) {

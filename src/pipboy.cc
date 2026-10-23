@@ -617,7 +617,10 @@ int pipboyOpen(int intent)
             break;
         }
 
-        if (keyCode == KEY_F12) {
+        // CE: Desktop access to the same touch-friendly journal.
+        if (keyCode == KEY_UPPERCASE_J || keyCode == KEY_LOWERCASE_J) {
+            pipboyOpenMobile(PIPBOY_OPEN_INTENT_UNSPECIFIED);
+        } else if (keyCode == KEY_F12) {
             takeScreenshot();
         } else if (keyCode >= 500 && keyCode <= 504) {
             // CE: Save previous tab selected so that the underlying handlers

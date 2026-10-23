@@ -13,6 +13,9 @@
 
 namespace fallout {
 
+struct NpcBrainStory;
+void characterEditorFillStory(NpcBrainStory* story);
+
 extern int gCharacterEditorRemainingCharacterPoints;
 
 enum PerkCarryOverMode {

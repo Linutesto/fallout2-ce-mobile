@@ -1,3 +1,4 @@
+#include "npc_story.h"
 #include "game_dialog.h"
 
 #include <algorithm>
@@ -917,6 +918,7 @@ bool gameDialogWindowActive()
 // 0x444D3C
 void gameDialogEnter(Object* speaker, int mode)
 {
+    npcStoryBeginConversation();
     if (speaker == nullptr) {
         debugPrint("\nError: gdialogEnter: target was NULL!");
         return;
@@ -2660,6 +2662,7 @@ static void gameDialogFreeTalkFillRequest(NpcBrainRequest* request, const std::s
     }
 
     request->say = say;
+    npcStoryFillRequest(speaker, request);
 }
 
 // Waits for the answer, the reply showing that the speaker thinks. Esc gives
@@ -2728,6 +2731,11 @@ static int gameDialogFreeTalk()
             gameDialogSetReviewOptionText(said.c_str());
             gameDialogAddReviewText(response.say.c_str());
             reply = response.say;
+            for (const auto& result : npcStoryApplyResponse(gGameDialogSpeaker, response)) {
+                reply += " " + result;
+                gameDialogAddReviewText(result.c_str());
+                displayMonitorAddMessage(result.c_str());
+            }
             intent = response.intent;
             debugPrint("\nNPC brain: %s (%s) says [%s], intent %s\n", request.npcName.c_str(), response.source.c_str(), response.say.c_str(), intent.c_str());
         } else {

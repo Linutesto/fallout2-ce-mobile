@@ -1,4 +1,5 @@
 #include "character_editor.h"
+#include "npc_brain.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -2231,7 +2232,7 @@ static void characterEditorBuildKillsFolder(std::vector<CharacterEditorFolderEnt
 }
 
 // Lines of the karma list: karma and titles, town reputations, addictions.
-static void characterEditorBuildKarmaFolder(std::vector<CharacterEditorFolderEntry>& entries)
+static void characterEditorBuildKarmaFolder(std::vector<CharacterEditorFolderEntry>& entries, NpcBrainStory* story)
 {
     char formattedText[256];
 
@@ -2248,6 +2249,9 @@ static void characterEditorBuildKarmaFolder(std::vector<CharacterEditorFolderEnt
 
             if (reputation != gGenericReputationEntriesLength) {
                 GenericReputationEntry* reputationDescription = &(gGenericReputationEntries[reputation]);
+                if (story != nullptr) {
+                    story->karmaTitle = getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, reputationDescription->name);
+                }
 
                 char reputationValue[32];
                 compat_itoa(gGameGlobalVars[GVAR_PLAYER_REPUTATION], reputationValue, 10);
@@ -2268,6 +2272,7 @@ static void characterEditorBuildKarmaFolder(std::vector<CharacterEditorFolderEnt
         } else {
             if (gGameGlobalVars[karmaDescription->gvar] != 0) {
                 const char* name = getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, karmaDescription->name);
+                if (story != nullptr) story->perksTitles.push_back(name);
                 CharacterEditorFolderEntry entry = characterEditorMakeEntry(name, false);
                 entry.hasCard = true;
                 entry.card = characterEditorMakeCard(karmaDescription->art_num,
@@ -2326,6 +2331,9 @@ static void characterEditorBuildKarmaFolder(std::vector<CharacterEditorFolderEnt
             }
 
             const char* reputationName = getmsg(&gCharacterEditorMessageList, &gCharacterEditorMessageListItem, townReputationBaseMessageId);
+            if (story != nullptr && story->towns.size() < 20) {
+                story->towns.push_back({ cityShortName, reputationName, townReputation });
+            }
             snprintf(formattedText, sizeof(formattedText),
                 "%s: %s",
                 cityShortName,
@@ -2366,6 +2374,37 @@ static void characterEditorBuildKarmaFolder(std::vector<CharacterEditorFolderEnt
     }
 }
 
+// CE: Read the very same karma tables and title selection as the character
+// sheet, without entering the editor (which disables the map and cycling).
+void characterEditorFillStory(NpcBrainStory* story)
+{
+    bool ownTables = gKarmaEntries == nullptr;
+    if (ownTables) {
+        if (!messageListInit(&gCharacterEditorMessageList)) return;
+        char path[COMPAT_MAX_PATH];
+        snprintf(path, sizeof(path), "%seditor.msg", asc_5186C8);
+        if (!messageListLoad(&gCharacterEditorMessageList, path)) {
+            messageListFree(&gCharacterEditorMessageList);
+            return;
+        }
+        if (karmaInit() == -1 || genericReputationInit() == -1) {
+            karmaFree();
+            genericReputationFree();
+            messageListFree(&gCharacterEditorMessageList);
+            return;
+        }
+        customTownReputationInit();
+    }
+    std::vector<CharacterEditorFolderEntry> entries;
+    characterEditorBuildKarmaFolder(entries, story);
+    if (ownTables) {
+        customTownReputationFree();
+        genericReputationFree();
+        karmaFree();
+        messageListFree(&gCharacterEditorMessageList);
+    }
+}
+
 CharacterEditorCard characterEditorGetFolderCard(CharacterEditorFolder folder)
 {
     switch (folder) {
@@ -2396,7 +2435,7 @@ std::vector<CharacterEditorFolderEntry> characterEditorGetFolder(CharacterEditor
         characterEditorBuildPerksFolder(entries);
         break;
     case CharacterEditorFolder::Karma:
-        characterEditorBuildKarmaFolder(entries);
+        characterEditorBuildKarmaFolder(entries, nullptr);
         break;
     case CharacterEditorFolder::Kills:
         characterEditorBuildKillsFolder(entries);

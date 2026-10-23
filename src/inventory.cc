@@ -1,3 +1,4 @@
+#include "npc_story.h"
 #include "inventory.h"
 
 #include <assert.h>
@@ -6364,6 +6365,8 @@ static void barterGetPriceFactors(Object* dude, Object* npc, double* barterModMu
 
     // TODO: Check in debugger, complex math, probably uses floats, not doubles.
     *barterModMult = (gBarterFinalModifier + 100.0 - perkBonus) * 0.01;
+    // CE: The discount follows this NPC identity in desktop and touch barter.
+    *barterModMult *= npcStoryPriceMultiplier(npc);
     *skillRatio = (160.0 + npcBarter) / (160.0 + partyBarter);
     if (*barterModMult < 0) {
         // TODO: Probably 0.01 as float.
@@ -6579,6 +6582,15 @@ static int barterItemKeyCode(Object* item, bool playerSide, bool onTable)
     return -1;
 }
 
+// CE: The same quote is used by the item view and gameplay regression checks.
+int barterQuoteNpcItem(Object* buyer, Object* seller, Object* item, int quantity)
+{
+    double barterModMult;
+    double skillRatio;
+    barterGetPriceFactors(buyer, seller, &barterModMult, &skillRatio);
+    return static_cast<int>(barterModMult * skillRatio * itemStackCost(item, quantity) * 2.0);
+}
+
 int barterGetItemPrice(Object* item, int quantity, bool playerSide)
 {
     // Of the item (`objectGetCost` is the cost of what is inside it).
@@ -6587,10 +6599,7 @@ int barterGetItemPrice(Object* item, int quantity, bool playerSide)
         return cost;
     }
 
-    double barterModMult;
-    double skillRatio;
-    barterGetPriceFactors(_inven_dude, gBarterBarterer, &barterModMult, &skillRatio);
-    return static_cast<int>(barterModMult * (skillRatio * (cost * 2.0)));
+    return barterQuoteNpcItem(_inven_dude, gBarterBarterer, item, quantity);
 }
 
 // CE: Who put what on the player's barter table. With `[qol]

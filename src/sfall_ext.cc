@@ -1,3 +1,4 @@
+#include "npc_story.h"
 #include "sfall_ext.h"
 #include "sfall_filesystem.h"
 
@@ -171,11 +172,12 @@ bool sfallSaveGameData(File* stream)
         }
     }
 
-    return sfallFileSystemSave(stream);
+    return npcStorySave() && sfallFileSystemSave(stream);
 }
 
 bool sfallLoadGameData(File* stream)
 {
+    npcStoryReset();
     if (!sfall_gl_vars_load(stream)) {
         debugPrint("LOADSAVE (SFALL): ** Error loading global vars **\n");
         return false;
@@ -224,7 +226,9 @@ bool sfallLoadGameData(File* stream)
         drugEffectEventsSetLoadedPids(drugPids);
     }
 
-    return sfallFileSystemLoad(stream);
+    bool ok = sfallFileSystemLoad(stream);
+    if (ok) npcStoryLoad();
+    return ok;
 }
 
 } // namespace fallout

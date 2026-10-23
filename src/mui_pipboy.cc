@@ -1,4 +1,5 @@
 #include "mui.h"
+#include "npc_story.h"
 #include "mui_icons.h"
 #include "mui_map_view.h"
 #include "mui_notify.h"
@@ -97,6 +98,7 @@ namespace {
         Maps,
         Videos,
         Rest,
+        Journal,
         Count,
     };
 
@@ -140,6 +142,7 @@ namespace {
     private:
         Section section = Section::Quests;
         int quest = 0;
+        int journalQuest = 0;
         int holodisk = 0;
         // Holodisk whose narration was started (-1 none).
         int narratedHolodisk = -1;
@@ -161,6 +164,7 @@ namespace {
         void buildData(MuiContext& ui, const MuiRect& list, const MuiRect& detail);
         void buildMaps(MuiContext& ui, const MuiRect& list, const MuiRect& detail);
         void buildVideos(MuiContext& ui, const MuiRect& list, const MuiRect& detail);
+        void buildJournal(MuiContext& ui, const MuiRect& list, const MuiRect& detail);
         void buildRest(MuiContext& ui, const MuiRect& left, const MuiRect& right);
         void buildFullscreenMovie(MuiContext& ui);
         bool playerButton(MuiContext& ui, const std::string& id, const MuiRect& rect, MuiIcon icon);
@@ -321,6 +325,9 @@ namespace {
             ui.isInteractive = interactive;
             buildRest(ui, list, detail);
             break;
+        case Section::Journal:
+            buildJournal(ui, list, detail);
+            break;
         case Section::Count:
             break;
         }
@@ -370,6 +377,7 @@ namespace {
             { "pipboy.section.maps", kTextMaps, "Maps" },
             { "pipboy.section.videos", kTextVideos, "Videos" },
             { "pipboy.section.rest", kTextRest, "Rest" },
+            { "pipboy.section.journal", -1, "Journal" },
         };
 
         int count = static_cast<int>(Section::Count);
@@ -382,7 +390,7 @@ namespace {
             bool tapped = ui.touchable(sections[index].id, tabRect, &pressed);
             muiFillRoundRect(tabRect, ui.dp(6.0f), pressed ? theme.buttonPressed : (active ? theme.buttonPrimary : theme.button));
             muiStrokeRoundRect(tabRect, ui.dp(6.0f), ui.dp(1.0f), active || pressed ? theme.accent : theme.buttonBorder);
-            std::u32string label = ceText(sections[index].text, sections[index].fallback);
+            std::u32string label = sections[index].text == -1 ? gameText(sections[index].fallback) : ceText(sections[index].text, sections[index].fallback);
             float size = muiFitTextSize(label, tabRect.w - ui.dp(10.0f), ui.dp(14.0f), ui.dp(10.0f));
             muiDrawTextAligned(label, tabRect, size, active && !pressed ? theme.buttonPrimaryText : theme.buttonText, MuiAlign::Center, MuiAlign::Center);
 
@@ -510,6 +518,39 @@ namespace {
     }
 
     // MARK: Sections
+
+    // CE: Wasteland quests are save-bound; abandoning changes only this journal.
+    void PipboyScreen::buildJournal(MuiContext& ui, const MuiRect& list, const MuiRect& detail)
+    {
+        auto quests = npcStoryState().quests;
+        if (quests.empty()) {
+            drawEmpty(ui, { list.x, list.y, detail.right() - list.x, list.h }, U"No Wasteland quests yet.");
+            return;
+        }
+        journalQuest = std::min(journalQuest, static_cast<int>(quests.size()) - 1);
+        std::vector<std::u32string> names, states;
+        for (const auto& q : quests) {
+            names.push_back(gameText(q.title.c_str()));
+            states.push_back(gameText(q.state.c_str()));
+        }
+        listRows(ui, "pipboy.journal", list, names, states, &journalQuest);
+        const auto& q = quests[journalQuest];
+        resetDetail(ui, "journal." + q.id);
+        float buttonHeight = ui.dp(42.0f);
+        MuiRect textRect = detail;
+        textRect.h -= buttonHeight + ui.dp(8.0f);
+        std::string reward = "Reward: " + std::to_string(q.rewardCaps) + " caps, " + std::to_string(q.rewardXp) + " XP";
+        drawText(ui, "pipboy.detail", textRect, gameText(q.title.c_str()),
+            { gameText(("Giver: " + q.giverName).c_str()), gameText(q.objective.c_str()), gameText(reward.c_str()), gameText(("State: " + q.state).c_str()) });
+        if (q.state == "active") {
+            MuiRect button = { detail.x, detail.bottom() - buttonHeight, detail.w, buttonHeight };
+            bool pressed;
+            bool tapped = ui.touchable("pipboy.journal.abandon", button, &pressed);
+            muiFillRoundRect(button, ui.dp(6.0f), pressed ? muiTheme().buttonPressed : muiTheme().button);
+            muiDrawTextAligned(U"Abandon quest", button, ui.dp(14.0f), muiTheme().text, MuiAlign::Center, MuiAlign::Center);
+            if (tapped) npcStoryAbandon(q.id);
+        }
+    }
 
     // Locations with the count of quests to do; their quests, done ones at
     // the end crossed out (like the game).

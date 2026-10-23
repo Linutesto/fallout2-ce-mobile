@@ -349,6 +349,7 @@ int wmWorldMap_reset();
 int wmWorldMap_save(File* stream);
 int wmWorldMap_load(File* stream);
 int wmMapMaxCount();
+int wmAreaMaxCount();
 
 inline bool mapIsValid(int map)
 {

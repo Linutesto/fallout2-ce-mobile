@@ -163,6 +163,7 @@ void barterRequest(BarterRequest request);
 // player's items at their cost, trader's ones with the trader's markup (the
 // same formula as the table totals).
 int barterGetItemPrice(Object* item, int quantity, bool playerSide);
+int barterQuoteNpcItem(Object* buyer, Object* seller, Object* item, int quantity);
 
 // CE: Inventory screen of the mobile UI (mui_inventory.cc). The inventory
 // (`inventoryOpen`) runs without the game's window then: its loop performs
