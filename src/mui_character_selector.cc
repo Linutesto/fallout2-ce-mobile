@@ -1,6 +1,7 @@
 #include "mui.h"
 #include "mui_screens.h"
 
+#include <cstdlib>
 #include <stdio.h>
 
 #include <algorithm>

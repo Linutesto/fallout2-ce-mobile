@@ -2689,6 +2689,11 @@ int objectIsDoor(Object* object)
     return proto->scenery.type == SCENERY_TYPE_DOOR;
 }
 
+bool gameMouseIsAttackableScenery(Object* object)
+{
+    return object != nullptr && objectIsDoor(object);
+}
+
 static void customMouseModeFrmsInit()
 {
     configGetEnum<InterfaceFrameId>(&gContentConfig, CONTENT_CONFIG_SKILLDEX_SECTION, "first_aid", &(gGameMouseModeFrmIds[GAME_MOUSE_MODE_USE_FIRST_AID]), InterfaceFrameId::MouseCursorUseCrosshair);

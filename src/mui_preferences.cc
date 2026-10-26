@@ -648,7 +648,7 @@ namespace {
             rows.push_back(row);
         }
         {
-            Row row { Section::Graphics, RowKind::Choice, kTextMapFilter, "World filter", Origin::Port, kTextFilterNote, "MMPX / Scale3x smooth pixel edges; slower when zoomed out" };
+            Row row { Section::Graphics, RowKind::Choice, kTextMapFilter, "World filter", Origin::Port, kTextFilterNote, "Experimental: MMPX / Scale3x smooth pixel edges when zoomed in; can lower the frame rate on phones" };
             row.options = { kTextFilterNearest, kTextFilterLinear, kTextFilterSharp, kTextFilterMmpx, kTextFilterScale3x };
             row.optionsFromCe = true;
             row.get = [](const Values& values) { return static_cast<float>(values.mapFilter); };

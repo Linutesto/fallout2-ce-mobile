@@ -1,5 +1,6 @@
 #include "random.h"
 
+#include <cstdlib>
 #include <limits.h>
 #include <stdlib.h>
 

@@ -1,5 +1,6 @@
 #include "object.h"
 
+#include <cstdlib>
 #include <assert.h>
 #include <string.h>
 

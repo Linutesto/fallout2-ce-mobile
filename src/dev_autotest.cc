@@ -1,6 +1,7 @@
 #include "dev_autotest.h"
 #include "dev_story_test.h"
 
+#include <cstdlib>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -26,6 +27,8 @@
 #include "display_monitor.h"
 #include "elevator.h"
 #include "game.h"
+#include "game_config.h"
+#include "graphics.h"
 #include "game_commands.h"
 #include "game_dialog.h"
 #include "game_mouse.h"
@@ -76,6 +79,8 @@ void (*gDevAutotestInvenWieldObserver)(Object* critter, Object* item, int isWiel
 
 enum DevAutotestAction {
     DEV_AUTOTEST_ACTION_NONE,
+    DEV_AUTOTEST_ACTION_GRAPHICS,
+    DEV_AUTOTEST_ACTION_CHECK_GRAPHICS,
     DEV_AUTOTEST_ACTION_STORY,
     DEV_AUTOTEST_ACTION_STORY_REAL,
     DEV_AUTOTEST_ACTION_STORY_GUARDS,
@@ -464,6 +469,11 @@ enum DevAutotestAction {
     DEV_AUTOTEST_ACTION_WAIT_FREE_TALK,
     DEV_AUTOTEST_ACTION_DESTROY_TALK_SPEAKER,
     DEV_AUTOTEST_ACTION_ASSERT_TALK_CLOSED,
+    // Places the dude [a] tiles from the nearest door (towards where he
+    // stands) and centers the view on the door.
+    DEV_AUTOTEST_ACTION_MOVE_NEAR_DOOR,
+    // Long press on the nearest door (its radial menu).
+    DEV_AUTOTEST_ACTION_TOUCH_LONG_PRESS_DOOR,
 };
 
 struct DevAutotestStep {
@@ -708,6 +718,20 @@ static const DevAutotestStep kDevAutotestTacticalSteps[] = {
 // Combat with the HUD's buttons only (enemies too small to tap): next target
 // selects the nearest enemy in sight, attack attacks it (AP go down) and
 // keeps it selected for the next attack.
+// A door's radial menu has "Throw" with a molotov in hand (touch has no
+// crosshair to attack doors with): it throws the molotov at the door.
+static const DevAutotestStep kDevAutotestDoorAttackSteps[] = {
+    { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 30, "d00_start" },
+    { DEV_AUTOTEST_ACTION_EQUIP_ITEM, 159, HAND_LEFT, 0, 10, "d01_molotov" },
+    { DEV_AUTOTEST_ACTION_GIVE_ITEM, 159, 2, 0, 10, "d02_more_molotovs" },
+    { DEV_AUTOTEST_ACTION_LOG_HIT_MODE, 0, 0, 0, 1, "d03_hit_mode" },
+    { DEV_AUTOTEST_ACTION_MOVE_NEAR_DOOR, 4, 0, 0, 30, "d04_near_door" },
+    { DEV_AUTOTEST_ACTION_TOUCH_LONG_PRESS_DOOR, 0, 0, 0, 30, "d05_menu" },
+    { DEV_AUTOTEST_ACTION_TOUCH_TAP_RADIAL, GAME_MOUSE_ACTION_MENU_ITEM_COUNT, 0, 0, 300, "d06_throw" },
+    { DEV_AUTOTEST_ACTION_LOG_COMBAT, 0, 0, 0, 1, "d07_combat" },
+    { DEV_AUTOTEST_ACTION_LOG_INVENTORY, 0, 0, 0, 1, "d08_inventory" },
+};
+
 static const DevAutotestStep kDevAutotestHudAttackSteps[] = {
     { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 30, "a00_map" },
     // A spear (reach 2): a hit knocking the dude a tile back (RPU) leaves the
@@ -1285,6 +1309,24 @@ static Object* devAutotestFindNearestEnemyInSight()
 }
 
 // Returns screen position of the center of the object.
+static Object* devAutotestFindNearestDoor()
+{
+    Object* door = nullptr;
+    int bestDistance = 0;
+    for (Object* object = objectFindFirstAtElevation(gElevation); object != nullptr; object = objectFindNextAtElevation()) {
+        if ((object->flags & OBJECT_HIDDEN) != 0 || !gameMouseIsAttackableScenery(object)) {
+            continue;
+        }
+
+        int distance = objectGetDistanceBetween(gDude, object);
+        if (door == nullptr || distance < bestDistance) {
+            door = object;
+            bestDistance = distance;
+        }
+    }
+    return door;
+}
+
 static void devAutotestGetObjectScreenPosition(Object* object, float* x, float* y)
 {
     Rect rect;
@@ -1508,12 +1550,40 @@ static const DevAutotestStep kDevAutotestGameFilesSteps[] = {
     { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 30, "g00_start" },
     { DEV_AUTOTEST_ACTION_BACK, 0, 0, 0, 40, "g01_menu" },
     { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 30, "g02_settings", "menu.settings" },
-    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "g03_files", "prefs.sections.4" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "g03_files", "prefs.sections.5" },
     { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 30, "g04_export_asks", "prefs.files.export" },
     { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "g05_no", "dialog.secondary" },
     { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 30, "g06_delete_asks", "prefs.files.delete" },
     { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "g07_no", "dialog.secondary" },
     { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "g08_game", "prefs.sections.0" },
+};
+
+// The matrix is captured synchronously: one Klamath frame, no game ticks
+// between combinations. The remaining steps exercise real Preferences widgets.
+static const DevAutotestStep kDevAutotestGraphicsSteps[] = {
+    { DEV_AUTOTEST_ACTION_WAIT_MAP_LOADED, 1800, 0, 0, 30, "g00_loaded" },
+    { DEV_AUTOTEST_ACTION_ZOOM_AT_DUDE, 3.0f, 0, 0, 10, "g01_zoom3" },
+    { DEV_AUTOTEST_ACTION_GRAPHICS, 0, 0, 0, 1, "g02_matrix" },
+    { DEV_AUTOTEST_ACTION_BACK, 0, 0, 0, 20, "g03_menu" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "g04_settings", "menu.settings" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "g05_graphics", "prefs.sections.4" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 10, "g06_oled_preview", "prefs.rows.381.1" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 10, "g07_mmpx", "prefs.rows.280.3" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 10, "g08_refresh_off", "prefs.rows.389" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 10, "g09_apply", "prefs.apply" },
+    { DEV_AUTOTEST_ACTION_CHECK_GRAPHICS, 1, 3, 0, 1, "g10_saved" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 10, "g11_warm_preview", "prefs.rows.381.2" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 10, "g12_scale3x", "prefs.rows.280.4" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 10, "g13_refresh_on", "prefs.rows.389" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 10, "g14_back", "prefs.back" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "g15_discard", "dialog.secondary" },
+    { DEV_AUTOTEST_ACTION_CHECK_GRAPHICS, 1, 3, 0, 1, "g16_discarded" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "g17_reopen", "menu.settings" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 10, "g18_graphics", "prefs.sections.4" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 10, "g19_reset_asks", "prefs.reset" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 10, "g20_reset", "dialog.primary" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 10, "g21_apply_defaults", "prefs.apply" },
+    { DEV_AUTOTEST_ACTION_CHECK_GRAPHICS, 0, 2, 1, 1, "g22_defaults" },
 };
 
 static const DevAutotestStep kDevAutotestPreferencesSteps[] = {
@@ -1573,7 +1643,7 @@ static const DevAutotestStep kDevAutotestAboutSteps[] = {
     { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 30, "a00_start" },
     { DEV_AUTOTEST_ACTION_BACK, 0, 0, 0, 40, "a01_menu" },
     { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 30, "a02_settings", "menu.settings" },
-    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 30, "a03_about", "prefs.sections.5" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 30, "a03_about", "prefs.sections.6" },
     { DEV_AUTOTEST_ACTION_CHECK_WIDGET, 1, 0, 0, 1, "a04_source_button", "prefs.about.source" },
     { DEV_AUTOTEST_ACTION_MUI_DRAG_BY, 0, -0.5f, 0, 40, "a05_scrolled", "prefs.about" },
     { DEV_AUTOTEST_ACTION_MUI_DRAG_BY, 0, -0.5f, 0, 40, "a06_scrolled", "prefs.about" },
@@ -2972,7 +3042,10 @@ static void devAutotestPrepareSaves()
 
 void devAutotestSetScenario(const char* name)
 {
-    if (strcmp(name, "story-guards") == 0) {
+    if (strcmp(name, "graphics") == 0) {
+        gDevAutotestSteps = kDevAutotestGraphicsSteps;
+        gDevAutotestStepCount = sizeof(kDevAutotestGraphicsSteps) / sizeof(kDevAutotestGraphicsSteps[0]);
+    } else if (strcmp(name, "story-guards") == 0) {
         gDevAutotestSteps = kDevAutotestStoryGuardSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestStoryGuardSteps) / sizeof(kDevAutotestStoryGuardSteps[0]);
     } else if (strcmp(name, "story-real") == 0) {
@@ -3299,6 +3372,9 @@ void devAutotestSetScenario(const char* name)
     } else if (strcmp(name, "behindcritter") == 0) {
         gDevAutotestSteps = kDevAutotestBehindCritterSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestBehindCritterSteps) / sizeof(kDevAutotestBehindCritterSteps[0]);
+    } else if (strcmp(name, "doorattack") == 0) {
+        gDevAutotestSteps = kDevAutotestDoorAttackSteps;
+        gDevAutotestStepCount = sizeof(kDevAutotestDoorAttackSteps) / sizeof(kDevAutotestDoorAttackSteps[0]);
     } else if (strcmp(name, "hudattack") == 0) {
         gDevAutotestSteps = kDevAutotestHudAttackSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestHudAttackSteps) / sizeof(kDevAutotestHudAttackSteps[0]);
@@ -3511,6 +3587,89 @@ static void devAutotestLogItems()
     devAutotestLog("  global vars %08x\n", devAutotestChecksum(gGameGlobalVars, gGameGlobalVarsLength));
 }
 
+static void devAutotestGraphics()
+{
+    SDL_RendererInfo rendererInfo;
+    SDL_GetRendererInfo(gSdlRenderer, &rendererInfo);
+    int physicalWidth, physicalHeight;
+    SDL_GetRendererOutputSize(gSdlRenderer, &physicalWidth, &physicalHeight);
+    devAutotestLog("graphics renderer=%s logical=%dx%d output=%dx%d zoom=%.3f\n", rendererInfo.name,
+        screenGetWidth(), screenGetHeight(), physicalWidth, physicalHeight, worldViewGetZoom());
+    // Palette mutations never feed back into the game's 6-bit palette.
+    const unsigned char* buffer = worldViewGetBuffer();
+    size_t bufferSize = static_cast<size_t>(worldViewGetWidth()) * worldViewGetHeight();
+    std::vector<unsigned char> frozen(buffer, buffer + bufferSize);
+    unsigned int frozenGameTime = gameTimeGetTime();
+    unsigned char original[768];
+    memcpy(original, directDrawGetPalette(), sizeof(original));
+    for (int preset = 0; preset < kColorPresetCount; preset++) {
+        screenSetColorPreset(preset);
+        if (memcmp(original, directDrawGetPalette(), sizeof(original)) != 0) {
+            devAutotestLog("FAIL: grading changed the game palette\n");
+            exit(EXIT_FAILURE);
+        }
+        // Same entry points used by fades and water/fire/monitor cycling.
+        unsigned char cycling[3] = { 15, 30, 45 };
+        directDrawSetPaletteInRange(cycling, 229, 1);
+        Uint32 expected = graphicsGradeColor(0xFF3C78B4, preset);
+        if (screenGetPalette()[229] != expected) {
+            devAutotestLog("FAIL: cycling palette grade\n");
+            exit(EXIT_FAILURE);
+        }
+        directDrawSetPalette(original);
+        for (int filter = 0; filter < 5; filter++) {
+            worldViewSetFilter(filter);
+            std::string name = "matrix_" + std::string(graphicsColorPresetName(preset)) + "_" + std::to_string(filter);
+            devAutotestCaptureNextFrame(name.c_str());
+            renderPresent();
+        }
+    }
+    if (memcmp(frozen.data(), worldViewGetBuffer(), bufferSize) != 0 || gameTimeGetTime() != frozenGameTime) {
+        devAutotestLog("FAIL: matrix changed the world buffer or game time\n");
+        exit(EXIT_FAILURE);
+    }
+    devAutotestLog("graphics frozen world buffer and game time: PASS\n");
+    screenSetColorPreset(0);
+    // Measure recomposition (conversion, magnifier, upload, draw submission),
+    // against the cached path. Flush submits commands; it is not a GPU fence.
+    // No PNG/readback time is included.
+    std::string csvPath = gDevAutotestOutputPath + "/benchmark.csv";
+    FILE* csv = fopen(csvPath.c_str(), "w");
+    if (csv == nullptr) exit(EXIT_FAILURE);
+    fprintf(csv, "zoom,filter,iterations,median_recompose_ms,p95_recompose_ms,median_cached_ms\n");
+    for (float zoom : { 3.0f, 1.0f, 0.5f }) {
+        worldViewSetZoom(zoom, screenGetWidth()/2, screenGetVisibleHeight()/2);
+        // Refresh the visible map area at this zoom before timing.
+        tileWindowRefresh();
+        for (int filter = 0; filter < 5; filter++) {
+            std::vector<double> compose, cached;
+            worldViewSetFilter(filter);
+            worldViewRender(gSdlRenderer);
+            SDL_RenderFlush(gSdlRenderer);
+            for (int i = 0; i < 30; i++) {
+                worldViewSetFilter(filter);
+                Uint64 start = SDL_GetPerformanceCounter();
+                worldViewRender(gSdlRenderer);
+                SDL_RenderFlush(gSdlRenderer);
+                compose.push_back((SDL_GetPerformanceCounter()-start)*1000.0/SDL_GetPerformanceFrequency());
+                start = SDL_GetPerformanceCounter();
+                worldViewRender(gSdlRenderer);
+                SDL_RenderFlush(gSdlRenderer);
+                cached.push_back((SDL_GetPerformanceCounter()-start)*1000.0/SDL_GetPerformanceFrequency());
+            }
+            std::sort(compose.begin(), compose.end());
+            std::sort(cached.begin(), cached.end());
+            fprintf(csv, "%.1f,%d,30,%.5f,%.5f,%.5f\n", zoom, filter, compose[15], compose[28], cached[15]);
+        }
+    }
+    fclose(csv);
+    worldViewSetZoom(3.0f, screenGetWidth()/2, screenGetVisibleHeight()/2);
+    tileWindowRefresh();
+    worldViewSetFilter(settings.world_view.filter);
+    screenSetColorPreset(graphicsColorPresetIndex(settings.graphics.color_preset.c_str()));
+    devAutotestLog("graphics: 25 frozen map frames, 5 palette/cycling checks, 15 benchmark cases: PASS\n");
+}
+
 void devAutotestTick()
 {
     if (!gDevAutotestEnabled) {
@@ -3649,6 +3808,27 @@ void devAutotestTick()
 
         Rect visibleRect;
         switch (step->action) {
+        case DEV_AUTOTEST_ACTION_GRAPHICS:
+            devAutotestGraphics();
+            break;
+        case DEV_AUTOTEST_ACTION_CHECK_GRAPHICS: {
+            Config disk;
+            bool ok = configInit(&disk) && configRead(&disk, gGameConfigFilePath, false);
+            char* preset = nullptr;
+            int filter = -1;
+            bool refresh = false;
+            ok = ok && configGetString(&disk, "graphics", "color_preset", &preset)
+                && configGetInt(&disk, "world_view", "filter", &filter)
+                && configGetBool(&disk, "graphics", "high_refresh", &refresh);
+            ok = ok && strcmp(preset, graphicsColorPresetName(static_cast<int>(step->a))) == 0
+                && filter == static_cast<int>(step->b) && refresh == (step->c != 0)
+                && settings.graphics.color_preset == preset && settings.world_view.filter == filter
+                && settings.graphics.high_refresh == refresh;
+            configFree(&disk);
+            devAutotestLog("graphics Preferences persisted preset=%d filter=%d refresh=%d: %s\n", int(step->a), int(step->b), int(step->c), ok ? "PASS" : "FAIL");
+            if (!ok) exit(EXIT_FAILURE);
+            break;
+        }
         case DEV_AUTOTEST_ACTION_ZOOM:
             worldViewSetZoom(step->a,
                 step->b < 0 ? screenGetWidth() / 2 : step->b,
@@ -6397,6 +6577,36 @@ void devAutotestTick()
                 // Same as "A" key.
                 _combat(nullptr);
                 return;
+            }
+            break;
+        }
+        case DEV_AUTOTEST_ACTION_MOVE_NEAR_DOOR: {
+            Object* door = devAutotestFindNearestDoor();
+            if (door == nullptr) {
+                devAutotestLog("  no door\n");
+                break;
+            }
+            Rotation rotation = static_cast<Rotation>(tileGetRotationTo(door->tile, gDude->tile));
+            int tile = door->tile;
+            for (int distance = 0; distance < static_cast<int>(step->a); distance++) {
+                tile = tileGetTileInDirection(tile, rotation, 1);
+            }
+            if (_obj_blocking_at(gDude, tile, gDude->elevation) == nullptr) {
+                Rect rect;
+                objectSetLocation(gDude, tile, gDude->elevation, &rect);
+            }
+            tileSetCenter(door->tile, TILE_SET_CENTER_REFRESH_WINDOW);
+            devAutotestLog("  door pid %d at tile %d, dude at tile %d (distance %d)\n", door->pid, door->tile, gDude->tile, objectGetDistanceBetween(gDude, door));
+            break;
+        }
+        case DEV_AUTOTEST_ACTION_TOUCH_LONG_PRESS_DOOR: {
+            Object* door = devAutotestFindNearestDoor();
+            if (door != nullptr) {
+                float x;
+                float y;
+                devAutotestGetObjectScreenPosition(door, &x, &y);
+                devAutotestLog("  long press door at tile %d\n", door->tile);
+                devAutotestStartTouch(x, y, x, y, 45, 0);
             }
             break;
         }

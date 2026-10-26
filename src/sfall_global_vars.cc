@@ -1,5 +1,6 @@
 #include "sfall_global_vars.h"
 
+#include <new>
 #include <cstdint>
 #include <cstring>
 #include <unordered_map>

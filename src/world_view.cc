@@ -71,6 +71,10 @@ static Uint32 gPalette[256];
 
 static int gFilter = WORLD_VIEW_FILTER_SHARP;
 
+// Physical pixels per world pixel below which MMPX / Scale3x are not used
+// (see `worldViewDraw`).
+static constexpr float kMagnifyMinScale = 2.5f;
+
 // Visible part of the world texture tiles composed at an integer scale (the
 // final scaling samples one texture, so there are no seams between tiles);
 // reused while the tiles, the source and the scale stay the same.
@@ -703,15 +707,24 @@ static void worldViewDraw(SDL_Renderer* renderer)
     // Nearest: composed 1:1, scaled with nearest. Linear: composed 1:1,
     // scaled with bilinear. Sharp bilinear: composed with nearest by the
     // largest integer factor, the remaining fractional part is smoothed.
+    // The edge-smoothing magnifiers run on the CPU at every recompose, and the
+    // composition is redone whenever the view moves or anything on the map
+    // animates. Zoomed out they cover the most pixels yet are too small to
+    // see, so below this scale they give way to sharp bilinear.
+    int filter = gFilter;
+    if (filter >= WORLD_VIEW_FILTER_MMPX && scale < kMagnifyMinScale) {
+        filter = WORLD_VIEW_FILTER_SHARP;
+    }
+
     int factor = 1;
     SDL_ScaleMode scaleMode = SDL_ScaleModeLinear;
-    switch (gFilter) {
+    switch (filter) {
     case WORLD_VIEW_FILTER_NEAREST:
         scaleMode = SDL_ScaleModeNearest;
         break;
     case WORLD_VIEW_FILTER_MMPX:
     case WORLD_VIEW_FILTER_SCALE3X: {
-        int magnifier = gFilter == WORLD_VIEW_FILTER_MMPX ? 2 : 3;
+        int magnifier = filter == WORLD_VIEW_FILTER_MMPX ? 2 : 3;
         factor = magnifier * std::max(static_cast<int>(floorf(scale / magnifier + 0.001f)), 1);
         break;
     }
@@ -753,7 +766,7 @@ static void worldViewDraw(SDL_Renderer* renderer)
         if (SDL_SetRenderTarget(renderer, gComposeTexture) != 0) {
             return;
         }
-        if (gFilter < WORLD_VIEW_FILTER_MMPX || !worldViewMagnify(renderer, srcRect, factor)) {
+        if (filter < WORLD_VIEW_FILTER_MMPX || !worldViewMagnify(renderer, srcRect, factor)) {
             worldTextureDraw(renderer, srcRect, factor);
         }
         SDL_SetRenderTarget(renderer, nullptr);

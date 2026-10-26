@@ -12,7 +12,10 @@
 #include <thread>
 #include <utility>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -44,6 +47,39 @@ namespace {
     using namespace brainJson;
 
     // ---- HTTP -------------------------------------------------------------
+
+#ifdef _WIN32
+    using SocketHandle = SOCKET;
+    constexpr SocketHandle kNoSocket = INVALID_SOCKET;
+
+    bool socketsReady()
+    {
+        static const bool ready = [] {
+            WSADATA data;
+            return WSAStartup(MAKEWORD(2, 2), &data) == 0;
+        }();
+        return ready;
+    }
+
+    int poll(struct pollfd* fds, unsigned long count, int timeoutMs) { return WSAPoll(fds, count, timeoutMs); }
+    void closeSocket(SocketHandle fd) { closesocket(fd); }
+    void setNonBlocking(SocketHandle fd)
+    {
+        u_long on = 1;
+        ioctlsocket(fd, FIONBIO, &on);
+    }
+    bool connectPending() { return WSAGetLastError() == WSAEWOULDBLOCK || WSAGetLastError() == WSAEINPROGRESS; }
+    bool ioRetryable() { return WSAGetLastError() == WSAEWOULDBLOCK || WSAGetLastError() == WSAEINTR; }
+#else
+    using SocketHandle = int;
+    constexpr SocketHandle kNoSocket = -1;
+
+    bool socketsReady() { return true; }
+    void closeSocket(SocketHandle fd) { close(fd); }
+    void setNonBlocking(SocketHandle fd) { fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK); }
+    bool connectPending() { return errno == EINPROGRESS; }
+    bool ioRetryable() { return errno == EAGAIN || errno == EINTR; }
+#endif
 
     struct HttpEndpoint {
         std::string host;
@@ -110,10 +146,11 @@ namespace {
     // Returns the HTTP status, or -1 (no connection, timeout, bad answer).
     int httpRequest(const HttpEndpoint& endpoint, const char* method, const std::string& path, const std::string& token, const std::string& body, unsigned int timeoutMs, std::string* responseBody, std::string* error)
     {
-#ifdef _WIN32
-        *error = "not supported on this platform";
-        return -1;
-#else
+        if (!socketsReady()) {
+            *error = "network unavailable";
+            return -1;
+        }
+
         Clock::time_point deadline = Clock::now() + std::chrono::milliseconds(timeoutMs);
 
         struct addrinfo hints;
@@ -127,32 +164,32 @@ namespace {
             return -1;
         }
 
-        int fd = -1;
-        for (struct addrinfo* address = addresses; address != nullptr && fd == -1; address = address->ai_next) {
-            int candidate = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
-            if (candidate == -1) {
+        SocketHandle fd = kNoSocket;
+        for (struct addrinfo* address = addresses; address != nullptr && fd == kNoSocket; address = address->ai_next) {
+            SocketHandle candidate = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
+            if (candidate == kNoSocket) {
                 continue;
             }
-            fcntl(candidate, F_SETFL, fcntl(candidate, F_GETFL, 0) | O_NONBLOCK);
-            int rc = connect(candidate, address->ai_addr, address->ai_addrlen);
-            if (rc != 0 && errno == EINPROGRESS) {
+            setNonBlocking(candidate);
+            int rc = connect(candidate, address->ai_addr, static_cast<int>(address->ai_addrlen));
+            if (rc != 0 && connectPending()) {
                 struct pollfd pfd = { candidate, POLLOUT, 0 };
                 if (poll(&pfd, 1, static_cast<int>(msLeft(deadline))) == 1) {
                     int socketError = 0;
                     socklen_t length = sizeof(socketError);
-                    getsockopt(candidate, SOL_SOCKET, SO_ERROR, &socketError, &length);
+                    getsockopt(candidate, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&socketError), &length);
                     rc = socketError == 0 ? 0 : -1;
                 }
             }
             if (rc == 0) {
                 fd = candidate;
             } else {
-                close(candidate);
+                closeSocket(candidate);
             }
         }
         freeaddrinfo(addresses);
 
-        if (fd == -1) {
+        if (fd == kNoSocket) {
             *error = "cannot connect to " + endpoint.host + ":" + endpoint.port;
             return -1;
         }
@@ -181,16 +218,16 @@ namespace {
         while (sent < request.size()) {
             struct pollfd pfd = { fd, POLLOUT, 0 };
             if (poll(&pfd, 1, static_cast<int>(msLeft(deadline))) != 1) {
-                close(fd);
+                closeSocket(fd);
                 *error = "timeout sending";
                 return -1;
             }
-            ssize_t n = send(fd, request.data() + sent, request.size() - sent, sendFlags);
+            auto n = send(fd, request.data() + sent, static_cast<int>(request.size() - sent), sendFlags);
             if (n <= 0) {
-                if (n == -1 && (errno == EAGAIN || errno == EINTR)) {
+                if (n == -1 && ioRetryable()) {
                     continue;
                 }
-                close(fd);
+                closeSocket(fd);
                 *error = "send failed";
                 return -1;
             }
@@ -203,30 +240,30 @@ namespace {
             struct pollfd pfd = { fd, POLLIN, 0 };
             int ready = poll(&pfd, 1, static_cast<int>(msLeft(deadline)));
             if (ready != 1) {
-                close(fd);
+                closeSocket(fd);
                 *error = "timeout waiting for the answer";
                 return -1;
             }
-            ssize_t n = recv(fd, buffer, sizeof(buffer), 0);
+            auto n = recv(fd, buffer, static_cast<int>(sizeof(buffer)), 0);
             if (n == 0) {
                 break;
             }
             if (n < 0) {
-                if (errno == EAGAIN || errno == EINTR) {
+                if (ioRetryable()) {
                     continue;
                 }
-                close(fd);
+                closeSocket(fd);
                 *error = "receive failed";
                 return -1;
             }
             raw.append(buffer, static_cast<size_t>(n));
             if (raw.size() > kMaxResponseBytes) {
-                close(fd);
+                closeSocket(fd);
                 *error = "answer too big";
                 return -1;
             }
         }
-        close(fd);
+        closeSocket(fd);
 
         size_t headerEnd = raw.find("\r\n\r\n");
         if (raw.compare(0, 5, "HTTP/") != 0 || headerEnd == std::string::npos) {
@@ -266,7 +303,6 @@ namespace {
 
         *responseBody = std::move(payload);
         return status;
-#endif
     }
 
     // ---- State ------------------------------------------------------------

@@ -1,5 +1,6 @@
 #include "touch_controls.h"
 
+#include <cstdlib>
 #include <math.h>
 
 #include <algorithm>
@@ -16,6 +17,8 @@
 #include "draw.h"
 #include "game.h"
 #include "game_mouse.h"
+#include "interface.h"
+#include "item.h"
 #include "hud_layout.h"
 #include "input.h"
 #include "map.h"
@@ -37,7 +40,13 @@
 
 namespace fallout {
 
-static constexpr int kRadialMenuMaxItems = GAME_MOUSE_ACTION_MENU_ITEM_COUNT - 1;
+// Touch-only menu item: attacks a door with the weapon in hand (the mouse
+// does it with the crosshair). Shown as "Throw" for grenades and molotovs.
+static constexpr GameMouseActionMenuItem kRadialMenuItemAttack = static_cast<GameMouseActionMenuItem>(GAME_MOUSE_ACTION_MENU_ITEM_COUNT);
+static constexpr int kAttackNameMessageId = 392;
+static constexpr int kThrowNameMessageId = 393;
+
+static constexpr int kRadialMenuMaxItems = GAME_MOUSE_ACTION_MENU_ITEM_COUNT;
 
 // Radial menu sizes, dp: button diameter, minimal distance from the center of
 // the menu to button centers, extra space around buttons which still counts as
@@ -1035,8 +1044,11 @@ static bool radialMenuOpen(int x, int y)
         return false;
     }
 
-    GameMouseActionMenuItem items[GAME_MOUSE_ACTION_MENU_ITEM_COUNT - 1];
+    GameMouseActionMenuItem items[kRadialMenuMaxItems];
     int itemsLength = gameMouseBuildActionMenuItems(target, items);
+    if (gameMouseIsAttackableScenery(target) && itemsLength < kRadialMenuMaxItems) {
+        items[itemsLength++] = kRadialMenuItemAttack;
+    }
     if (!radialMenuOpenItems(items, itemsLength, x, y)) {
         return false;
     }
@@ -1242,6 +1254,30 @@ static void radialMenuClose()
     gRadialMenu.highlightedItem = -1;
 }
 
+// Whether the active hand's attack is a throw (grenades, molotovs, spears).
+static bool radialMenuActiveAttackIsThrow()
+{
+    HitMode hitMode;
+    bool aiming;
+    if (interfaceGetCurrentHitMode(&hitMode, &aiming) == -1) {
+        return false;
+    }
+
+    Object* weapon = critterGetWeaponForHitMode(gDude, hitMode);
+    return weapon != nullptr && weaponGetAttackTypeForHitMode(weapon, hitMode) == ATTACK_TYPE_THROW;
+}
+
+static const char* radialMenuItemName(int menuItem)
+{
+    if (menuItem == kRadialMenuItemAttack) {
+        return radialMenuActiveAttackIsThrow()
+            ? muiText(kThrowNameMessageId, "Throw")
+            : muiText(kAttackNameMessageId, "Attack");
+    }
+
+    return muiText(kActionNameMessageBase + menuItem, kActionNameFallbacks[menuItem]);
+}
+
 static MuiIcon radialMenuIcon(int menuItem)
 {
     switch (menuItem) {
@@ -1263,6 +1299,8 @@ static MuiIcon radialMenuIcon(int menuItem)
         return MuiIcon::Skills;
     case GAME_MOUSE_ACTION_MENU_ITEM_PUSH:
         return MuiIcon::Push;
+    case kRadialMenuItemAttack:
+        return MuiIcon::Target;
     default:
         return MuiIcon::Cancel;
     }
@@ -1325,8 +1363,8 @@ void RadialMenuScreen::build(MuiContext& ui)
 
     // Name of the action under the finger, below the button (above it at the
     // bottom edge).
-    if (highlightedItem >= 0 && highlightedItem < GAME_MOUSE_ACTION_MENU_ITEM_COUNT) {
-        std::u32string name = muiDecodeGameText(muiText(kActionNameMessageBase + highlightedItem, kActionNameFallbacks[highlightedItem]));
+    if (highlightedItem >= 0 && highlightedItem <= kRadialMenuItemAttack) {
+        std::u32string name = muiDecodeGameText(radialMenuItemName(highlightedItem));
         float size = ui.dp(14.0f);
         float padding = ui.dp(8.0f);
         float width = muiTextWidth(name, size) + padding * 2.0f;
@@ -1428,6 +1466,14 @@ static void radialMenuSelect(int index)
         && menuItem != GAME_MOUSE_ACTION_MENU_ITEM_CANCEL) {
         mapHintsSetDestination(-1);
         mapHintsSetInteraction(target);
+    }
+
+    if (menuItem == kRadialMenuItemAttack) {
+        actionLog("map menu: attack%s", actionLogObject(target));
+        mapHintsSetInteraction(nullptr);
+        touchControlsSetGameMouseMode(GAME_MOUSE_MODE_CROSSHAIR);
+        playerAttack(target);
+        return;
     }
 
     actionLog("map menu: %s%s", menuItem >= 0 && menuItem < GAME_MOUSE_ACTION_MENU_ITEM_COUNT ? kActionNameFallbacks[menuItem] : "?",

@@ -1,5 +1,6 @@
 #include "elevator.h"
 
+#include <cstdlib>
 #include <ctype.h>
 #include <string.h>
 

@@ -510,6 +510,7 @@ endif()
 if(WIN32)
     target_link_libraries(${EXECUTABLE_NAME}
         winmm
+        ws2_32
     )
 endif()
 
@@ -831,6 +832,7 @@ if((NOT ANDROID) AND (NOT IOS) AND (NOT CMAKE_SYSTEM_NAME MATCHES "Emscripten"))
 
         target_link_libraries(mapper-ce
             winmm
+            ws2_32
         )
         
         if(MSVC)

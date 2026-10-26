@@ -414,3 +414,4 @@ GEMINI.md
 opencode.json
 # Strategy and private notes, kept locally (never committed)
 /docs-private/
+/build-win64/

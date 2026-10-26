@@ -139,6 +139,9 @@ int gameMouseBuildActionMenuItems(Object* targetObj, GameMouseActionMenuItem* ac
 // Performs action menu item on the object.
 void gameMouseExecuteActionMenuItem(Object* targetObj, GameMouseActionMenuItem menuItem);
 
+// Whether the crosshair attacks the object besides critters (doors).
+bool gameMouseIsAttackableScenery(Object* object);
+
 // Skill of a skill targeting mode, `SKILL_INVALID` for other modes.
 Skill gameMouseGetModeSkill(int mode);
 

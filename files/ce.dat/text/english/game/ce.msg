@@ -305,4 +305,8 @@
 {388}{}{Scale3x}
 {389}{}{High refresh}
 {390}{}{Use the display rate for touch and UI; game speed stays the same}
-{391}{}{MMPX / Scale3x smooth pixel edges; slower when zoomed out}
+{391}{}{Experimental: MMPX / Scale3x smooth pixel edges when zoomed in; can lower the frame rate on phones}
+
+# Touch radial menu on doors (touch_controls.cc)
+{392}{}{Attack}
+{393}{}{Throw}
