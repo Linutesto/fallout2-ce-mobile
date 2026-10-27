@@ -1,0 +1,5 @@
+<resources>
+    <!-- Wasteland Reborn HD (`-Pfallout2ce.hd`, its own .hd app next to
+         Wasteland): HD art drawn in full colour. -->
+    <string name="app_name">Wasteland HD</string>
+</resources>

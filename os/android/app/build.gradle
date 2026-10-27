@@ -196,7 +196,7 @@ android {
             initWith release
             // `-Pfallout2ce.phoneIdSuffix=.importtest`: a test copy installed
             // beside the player's (its own files and saves).
-            applicationIdSuffix project.findProperty('fallout2ce.phoneIdSuffix') ?: '.debug'
+            applicationIdSuffix project.findProperty('fallout2ce.phoneIdSuffix') ?: (project.hasProperty('fallout2ce.hd') ? '.hd' : '.debug')
             signingConfig signingConfigs.debug
             matchingFallbacks = ['release']
             externalNativeBuild {
@@ -230,8 +230,11 @@ android {
     // The .debug app (debug and phone builds: Wasteland Reborn's, installed
     // next to the official one) gets its own short name and green icon, so
     // the two can be told apart on the launcher.
-    sourceSets.debug.res.srcDir('src/wasteland/res')
-    sourceSets.phone.res.srcDir('src/wasteland/res')
+    // `-Pfallout2ce.hd`: Wasteland Reborn HD, its own .hd app ("Wasteland
+    // HD", the icon with an HD badge) with its own files and saves.
+    def wastelandRes = project.hasProperty('fallout2ce.hd') ? 'src/wasteland-hd/res' : 'src/wasteland/res'
+    sourceSets.debug.res.srcDir(wastelandRes)
+    sourceSets.phone.res.srcDir(wastelandRes)
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
