@@ -8,10 +8,10 @@
 #include <vector>
 
 #include "art.h"
-#include "hd_world.h"
-#include "graphics.h"
 #include "debug.h"
 #include "dev_autotest.h"
+#include "graphics.h"
+#include "hd_world.h"
 #include "map.h"
 #include "map_edge.h"
 #include "object.h"
@@ -258,7 +258,7 @@ void worldViewInvalidatePalette(int first, int count)
     (void)first;
     (void)count;
     worldTexturePaletteChanged();
-    hdWorldPaletteChanged();
+    hdWorldPaletteChanged(first, count);
 }
 
 void worldViewScrolled(int dx, int dy)
@@ -777,13 +777,14 @@ static void worldViewDraw(SDL_Renderer* renderer)
 
     bool sameSource = srcRect.x == gComposeSource.x && srcRect.y == gComposeSource.y && srcRect.w == gComposeSource.w && srcRect.h == gComposeSource.h;
     if (!gComposeValid || gComposeVersion != worldTextureVersion() || gComposeFactor != factor || !sameSource) {
+        SDL_Texture* previousTarget = SDL_GetRenderTarget(renderer);
         if (SDL_SetRenderTarget(renderer, gComposeTexture) != 0) {
             return;
         }
         if (filter < WORLD_VIEW_FILTER_MMPX || !worldViewMagnify(renderer, srcRect, factor)) {
             worldTextureDraw(renderer, srcRect, factor);
         }
-        SDL_SetRenderTarget(renderer, nullptr);
+        SDL_SetRenderTarget(renderer, previousTarget);
 
         gComposeValid = true;
         gComposeVersion = worldTextureVersion();
@@ -808,10 +809,8 @@ static void worldViewDraw(SDL_Renderer* renderer)
 
 void worldViewSetFilter(int filter)
 {
-    bool changed = gFilter != std::clamp(filter, 0, 4);
     gFilter = std::clamp(filter, 0, 4);
-    settings.world_view.filter = gFilter;
-    if (changed && hdWorldActive()) tileWindowRefresh();
+    hdWorldSetFilter(gFilter);
     gComposeValid = false;
 }
 
@@ -831,6 +830,24 @@ bool worldViewCaptureView(std::vector<unsigned char>* rgba, int* width, int* hei
     int sourceHeight = visible.bottom - visible.top + 1;
     if (sourceWidth <= 0 || sourceHeight <= 0 || maxWidth <= 0) {
         return false;
+    }
+
+    if (hdWorldActive() && hdWorldPixels() != nullptr) {
+        *width = std::min(sourceWidth * 2, maxWidth);
+        *height = std::max(sourceHeight * *width / sourceWidth, 1);
+        rgba->resize(static_cast<size_t>(*width) * *height * 4);
+        for (int y = 0; y < *height; y++)
+            for (int x = 0; x < *width; x++) {
+                int sx = visible.left * 2 + x * sourceWidth * 2 / *width;
+                int sy = visible.top * 2 + y * sourceHeight * 2 / *height;
+                Uint32 color = screenTransformWorldColor(hdWorldColorAt(sx, sy), preset);
+                size_t dest = (static_cast<size_t>(y) * *width + x) * 4;
+                (*rgba)[dest] = color >> 16;
+                (*rgba)[dest + 1] = color >> 8;
+                (*rgba)[dest + 2] = color;
+                (*rgba)[dest + 3] = 255;
+            }
+        return true;
     }
 
     *width = std::min(sourceWidth, maxWidth);

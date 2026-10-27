@@ -9,6 +9,7 @@
 #include "game_mouse.h"
 #include "game_sound.h"
 #include "graph_lib.h"
+#include "hd_world.h"
 #include "input.h"
 #include "kb.h"
 #include "loadsave.h"
@@ -604,6 +605,7 @@ static void _ShadeScreen(bool preserveWorldState)
         if (worldViewIsEnabled()) {
             // CE: Map is rendered into world view buffer.
             grayscalePaletteApply(worldViewGetBuffer(), worldViewGetWidth(), worldViewGetHeight(), worldViewGetWidth());
+            hdWorldGrayscale();
             worldViewInvalidateAll();
         } else {
             int windowWidth = windowGetWidth(gIsoWindow);

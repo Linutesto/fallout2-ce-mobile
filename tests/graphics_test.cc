@@ -61,5 +61,14 @@ int main()
         }
     }
     assert(stream.peek() == std::char_traits<char>::eof());
+    for (int preset = 0; preset < kColorPresetCount; preset++) {
+        GraphicsColorTransform transform;
+        transform.setPreset(preset);
+        for (unsigned i = 0; i < 8192; i++) {
+            uint32_t color = (i * 2654435761u);
+            assert(transform.apply(color) == graphicsGradeColor(color, preset));
+        }
+    }
+    printf("40960 exact HD grade/alpha comparisons: PASS\n");
     printf("%d colour comparisons (+ alpha checks), %d images x 2 filters, %zu output pixels: PASS\n", colors * kColorPresetCount, images, pixels);
 }

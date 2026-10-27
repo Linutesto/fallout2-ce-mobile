@@ -12,7 +12,6 @@
 #include "animation.h"
 #include "animation_defs.h"
 #include "art.h"
-#include "hd_world.h"
 #include "color.h"
 #include "combat.h"
 #include "combat_ai.h"
@@ -22,6 +21,7 @@
 #include "game.h"
 #include "game_dialog.h"
 #include "game_mouse.h"
+#include "hd_world.h"
 #include "item.h"
 #include "light.h"
 #include "map.h"
@@ -1085,8 +1085,8 @@ void _obj_render_post_roof(Rect* rect, int elevation)
     int hdWidth = rectGetWidth(&updatedRect);
     if (hdWorldActive()) {
         hdBefore.resize(static_cast<size_t>(hdWidth) * rectGetHeight(&updatedRect));
-        for (int y=updatedRect.top; y<=updatedRect.bottom; y++)
-            memcpy(hdBefore.data()+(y-updatedRect.top)*hdWidth, gObjectsWindowBuffer+y*gObjectsWindowPitch+updatedRect.left, hdWidth);
+        for (int y = updatedRect.top; y <= updatedRect.bottom; y++)
+            memcpy(hdBefore.data() + (y - updatedRect.top) * hdWidth, gObjectsWindowBuffer + y * gObjectsWindowPitch + updatedRect.left, hdWidth);
     }
     textObjectsRenderInRect(&updatedRect);
     if (!hdBefore.empty()) hdWorldCopyIndexedChanges(updatedRect, hdBefore.data());
@@ -5648,12 +5648,25 @@ static void _obj_render_object(Object* object, Rect* rect, int light)
     HdDrawOptions hdOptions;
     int hdLight = light;
     switch (object->flags & OBJECT_FLAG_0xFC000) {
-    case OBJECT_TRANS_RED: hdOptions.tint = COLOR_RED; break;
-    case OBJECT_TRANS_WALL: hdOptions.tint = COLOR_PALE_BLUE; hdLight = 65536; break;
-    case OBJECT_TRANS_GLASS: hdOptions.tint = COLOR_CYAN; hdOptions.glass = true; break;
-    case OBJECT_TRANS_STEAM: hdOptions.tint = COLOR_WHITE; break;
-    case OBJECT_TRANS_ENERGY: hdOptions.tint = COLOR_YELLOW_GREEN; break;
-    default: break;
+    case OBJECT_TRANS_RED:
+        hdOptions.tint = COLOR_RED;
+        break;
+    case OBJECT_TRANS_WALL:
+        hdOptions.tint = COLOR_PALE_BLUE;
+        hdLight = 65536;
+        break;
+    case OBJECT_TRANS_GLASS:
+        hdOptions.tint = COLOR_CYAN;
+        hdOptions.glass = true;
+        break;
+    case OBJECT_TRANS_STEAM:
+        hdOptions.tint = COLOR_WHITE;
+        break;
+    case OBJECT_TRANS_ENERGY:
+        hdOptions.tint = COLOR_YELLOW_GREEN;
+        break;
+    default:
+        break;
     }
     hdWorldDraw(frmId, art, object->frame, object->rotation, object->sx, object->sy, objectRect, hdLight, hdOptions);
 

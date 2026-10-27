@@ -17,7 +17,7 @@ int main()
     std::map<std::string, std::vector<unsigned char>> files;
     int reads = 0, logs = 0;
     auto png = [](unsigned w, unsigned h) {
-        std::vector<unsigned char> data(w*h*4, 127), out;
+        std::vector<unsigned char> data(w * h * 4, 127), out;
         assert(lodepng::encode(out, data, w, h) == 0);
         return out;
     };
@@ -25,12 +25,10 @@ int main()
     files["hd/art/a/0_1.png"] = png(4, 6);
     files["hd/art/a/0_2.png"] = png(4, 6);
     files["hd/art/a/0_3.png"] = png(5, 6);
-    files["hd/art/a/0_4.png"] = {1, 2, 3};
-    HdFrameCache cache(192,
-        [&](const std::string& path, std::vector<unsigned char>& out) {
+    files["hd/art/a/0_4.png"] = { 1, 2, 3 };
+    HdFrameCache cache(192, [&](const std::string& path, std::vector<unsigned char>& out) {
             ++reads; auto it = files.find(path); if (it == files.end()) return false;
-            out = it->second; return true;
-        }, [&](const std::string&) { ++logs; });
+            out = it->second; return true; }, [&](const std::string&) { ++logs; });
     auto a = cache.get("art/a.frm", 0, 0, 2, 3);
     assert(a && a->width == 4 && a->height == 6 && a->pixels.size() == 24);
     assert(a->pixels[0] == 0x7F7F7F7F);
@@ -45,15 +43,45 @@ int main()
     assert(!cache.get("art/a.frm", 0, 4, 2, 3));
     assert(!cache.get("art/a.frm", 0, 5, 2, 3));
     int failedReads = reads;
-    for (int i = 3; i <= 5; ++i) assert(!cache.get("art/a.frm", 0, i, 2, 3));
+    for (int i = 3; i <= 5; ++i)
+        assert(!cache.get("art/a.frm", 0, i, 2, 3));
     assert(reads == failedReads && logs == 2);
     // Dimensions are part of the lookup's validation even on a cached hit.
     assert(!cache.get("art/a.frm", 0, 1, 3, 3));
     assert(!cache.get("art/a.frm", 0, 1, 0, 3));
-    cache.setBudget(96); assert(cache.bytes() <= 96);
-    cache.setBudget(0); assert(cache.bytes() == 0);
+    cache.setBudget(96);
+    assert(cache.bytes() <= 96);
+    cache.setBudget(0);
+    assert(cache.bytes() == 0);
     assert(cache.get("art/a.frm", 0, 0, 2, 3));
     assert(cache.bytes() == 0);
-    cache.clear(); assert(cache.bytes() == 0);
+    cache.clear();
+    assert(cache.bytes() == 0);
+    // An asymmetric image catches RGBA channel/order and row-stride bugs.
+    std::vector<unsigned char> raw = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+    std::vector<unsigned char> encoded;
+    assert(lodepng::encode(encoded, raw, 2, 2) == 0);
+    files["hd/art/asymmetric/0_0.png"] = encoded;
+    auto asymmetric = cache.get("art/asymmetric.frm", 0, 0, 1, 1);
+    assert(asymmetric && asymmetric->pixels[0] == 0x04010203 && asymmetric->pixels[3] == 0x100D0E0F);
+    assert(!cache.get("art/a.frm", 0, 0, 2147483647, 2147483647));
+    int loggedBefore = logs;
+    assert(!cache.get("art/a.frm", 0, 4, 2, 3));
+    assert(logs == loggedBefore); // invalid asset still logs once after a flush
+
+    cache.setBudget(96);
+    int builds = 0;
+    auto generated = [&]() { ++builds; auto f=std::make_shared<HdFrame>(); f->width=4; f->height=6; f->pixels.assign(24,0xFF010203); return f; };
+    auto scaled = cache.generated("fallback", generated);
+    assert(cache.generated("fallback", generated) == scaled && builds == 1 && cache.bytes() == 96);
+    assert(cache.get("art/a.frm", 0, 0, 2, 3) && cache.bytes() == 96);
+    assert(cache.generated("fallback", generated) && builds == 2 && cache.bytes() == 96);
+    cache.clear();
+    for (int i = 0; i < 4096; i++)
+        assert(!cache.get("art/missing" + std::to_string(i) + ".frm", 0, 0, 1, 1));
+    int negativeReads = reads;
+    assert(!cache.get("art/missing0.frm", 0, 0, 1, 1) && reads == negativeReads);
+    assert(!cache.get("art/missing4096.frm", 0, 0, 1, 1));
+    assert(!cache.get("art/missing0.frm", 0, 0, 1, 1) && reads == negativeReads + 1);
     return 0;
 }

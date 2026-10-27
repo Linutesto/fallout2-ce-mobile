@@ -79,6 +79,38 @@ uint32_t graphicsGradeColor(uint32_t color, int preset)
     return result;
 }
 
+void GraphicsColorTransform::setPreset(int preset)
+{
+    preset_ = std::clamp(preset, 0, kColorPresetCount - 1);
+    const Grade& grade = kGrades[preset_];
+    saturation_ = grade.saturation;
+    warmth_ = grade.warmth;
+    for (int i = 0; i < 256; i++) {
+        double value = clamp01(i / 255.0 + grade.brightness);
+        value = clamp01(0.5 + (value - 0.5) * grade.contrast);
+        channels_[i] = std::pow(value, grade.gamma);
+    }
+}
+
+uint32_t GraphicsColorTransform::apply(uint32_t color) const
+{
+    if (preset_ == 0) return color;
+    double values[] = { channels_[(color >> 16) & 255], channels_[(color >> 8) & 255], channels_[color & 255] };
+    if (saturation_ != 1.0) {
+        double y = 0.2126 * values[0] + 0.7152 * values[1] + 0.0722 * values[2];
+        for (double& value : values)
+            value = clamp01(y + (value - y) * saturation_);
+    }
+    if (warmth_ != 0.0) {
+        values[0] = clamp01(values[0] + warmth_);
+        values[2] = clamp01(values[2] - warmth_);
+    }
+    uint32_t out = color & 0xFF000000;
+    for (int i = 0; i < 3; i++)
+        out |= uint32_t(std::clamp(int(values[i] * 255.0 + 0.5), 0, 255)) << (16 - i * 8);
+    return out;
+}
+
 void graphicsScale3x(const uint32_t* source, int width, int height, uint32_t* dest)
 {
     for (int y = 0; y < height; y++) {

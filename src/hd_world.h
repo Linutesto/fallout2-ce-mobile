@@ -1,8 +1,8 @@
 #ifndef FALLOUT_HD_WORLD_H_
 #define FALLOUT_HD_WORLD_H_
+#include "geometry.h"
 #include <SDL.h>
 #include <cstdint>
-#include "geometry.h"
 namespace fallout {
 struct Art;
 class FrmId;
@@ -22,11 +22,13 @@ void hdWorldExit();
 bool hdWorldInstalled();
 bool hdWorldActive();
 void hdWorldSettingsChanged();
+void hdWorldSetFilter(int filter);
 void hdWorldClear(const Rect& rect);
 void hdWorldScrolled(int dx, int dy);
-void hdWorldPaletteChanged();
+void hdWorldPaletteChanged(int first, int count);
+void hdWorldGrayscale();
 void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
-    int x, int y, const Rect& clip, int light, const HdDrawOptions& options = {});
+    int x, int y, const Rect& clip, int light, const HdDrawOptions& options = { });
 void hdWorldOutline(const FrmId& id, Art* art, int frame, int rotation,
     int x, int y, const Rect& clip, int color, int bandHeight, int bandCount,
     int tint = -1);
@@ -35,6 +37,7 @@ void hdWorldCopyIndexedChanges(const Rect& rect, const unsigned char* before);
 bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FRect& dest);
 void hdWorldResetRenderer();
 const uint32_t* hdWorldPixels();
+uint32_t hdWorldColorAt(int x2, int y2);
 void hdWorldResetCounts();
 void hdWorldGetCounts(uint64_t* hd, uint64_t* fallback);
 } // namespace fallout

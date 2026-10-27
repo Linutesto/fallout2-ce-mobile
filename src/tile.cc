@@ -10,11 +10,11 @@
 #include <vector>
 
 #include "art.h"
-#include "hd_world.h"
 #include "color.h"
 #include "debug.h"
 #include "draw.h"
 #include "game_mouse.h"
+#include "hd_world.h"
 #include "light.h"
 #include "map.h"
 #include "map_edge.h"
@@ -753,6 +753,21 @@ bool checkRectNeedsClear(const Rect* rect, bool hasVisArea, const Rect* visArea)
     return (rect->left < visArea->left || rect->right > visArea->right || rect->top < visArea->top || rect->bottom > visArea->bottom);
 }
 
+// CE: Edge stencils remain indexed; copy only their writes into the HD
+// surface, after all floor/object/roof drawing, in the same clipped region.
+static void tileRenderStencil(Rect* rect)
+{
+    std::vector<unsigned char> before;
+    int width = rectGetWidth(rect);
+    if (hdWorldActive()) {
+        before.resize(static_cast<size_t>(width) * rectGetHeight(rect));
+        for (int y = rect->top; y <= rect->bottom; y++)
+            memcpy(before.data() + (y - rect->top) * width, gTileWindowBuffer + y * gTileWindowPitch + rect->left, width);
+    }
+    tile_hires_stencil_draw(rect, gTileWindowBuffer, gTileWindowWidth, gTileWindowHeight);
+    if (!before.empty()) hdWorldCopyIndexedChanges(*rect, before.data());
+}
+
 // TODO: these two functions are exact copies of isoWindowRefreshRect*. gTileWindowBuffer == gIsoWindowBuffer, these are the same window!
 // 0x4B1554 refresh_mapper
 static void tileRefreshMapper(Rect* rect, int elevation)
@@ -774,7 +789,9 @@ static void tileRefreshMapper(Rect* rect, int elevation)
     Rect renderRect = rectToUpdate;
     bool didClear = checkRectNeedsClear(&rectToUpdate, hasVisArea, &visArea);
 
-    if (didClear) hdWorldClear(rectToUpdate);
+    // CE: Rebuild coverage from a clean surface even when the indexed
+    // floor overwrites every byte: fractional PNG alpha must not accumulate.
+    hdWorldClear(rectToUpdate);
 
     // HRP EdgeClipping: when clipped, clear only if CheckRect; otherwise always clear.
     if (didClear) {
@@ -800,7 +817,7 @@ static void tileRefreshMapper(Rect* rect, int elevation)
     _obj_render_post_roof(&renderRect, elevation);
 
     if (!hasVisArea) {
-        tile_hires_stencil_draw(&renderRect, gTileWindowBuffer, gTileWindowWidth, gTileWindowHeight);
+        tileRenderStencil(&renderRect);
     }
 
     tileMapperOverlayRender(gTileWindowBuffer, gTileWindowPitch, elevation, &renderRect);
@@ -831,7 +848,9 @@ static void tileRefreshGame(Rect* rect, int elevation)
     Rect renderRect = rectToUpdate;
     bool didClear = checkRectNeedsClear(&rectToUpdate, hasVisArea, &visArea);
 
-    if (didClear) hdWorldClear(rectToUpdate);
+    // CE: Rebuild coverage from a clean surface even when the indexed
+    // floor overwrites every byte: fractional PNG alpha must not accumulate.
+    hdWorldClear(rectToUpdate);
 
     // HRP EdgeClipping: when clipped, clear only if CheckRect; otherwise always clear.
     if (didClear) {
@@ -856,7 +875,7 @@ static void tileRefreshGame(Rect* rect, int elevation)
     _obj_render_post_roof(&renderRect, elevation);
 
     if (!hasVisArea) {
-        tile_hires_stencil_draw(&renderRect, gTileWindowBuffer, gTileWindowWidth, gTileWindowHeight);
+        tileRenderStencil(&renderRect);
     }
 
     gTileWindowRefreshProc(didClear ? &rectToUpdate : &renderRect);
@@ -2077,7 +2096,7 @@ static void tileRenderFloor(const TileFrmId& frmId, int x, int y, Rect* rect)
         HdDrawOptions hdOptions;
         hdOptions.lightMap = _intensity_map + 160;
         hdOptions.lightPitch = 80;
-        hdWorldDraw(frmId, art, 0, 0, savedX, savedY, *rect, 65536, hdOptions);
+        hdWorldDraw(frmId, art, 0, 0, savedX, savedY, *rect, ambientIntensity, hdOptions);
 
         unsigned char* v66 = gTileWindowBuffer + gTileWindowPitch * y + x;
         unsigned char* v67 = artGetFrameData(art) + frameWidth * v78 + v79;

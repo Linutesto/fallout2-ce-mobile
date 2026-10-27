@@ -27,14 +27,14 @@
 #include "display_monitor.h"
 #include "elevator.h"
 #include "game.h"
-#include "game_config.h"
-#include "graphics.h"
-#include "hd_world.h"
 #include "game_commands.h"
+#include "game_config.h"
 #include "game_dialog.h"
 #include "game_mouse.h"
 #include "game_movie.h"
 #include "game_sound.h"
+#include "graphics.h"
+#include "hd_world.h"
 #include "input.h"
 #include "interface.h"
 #include "inventory.h"
@@ -481,6 +481,9 @@ enum DevAutotestAction {
     DEV_AUTOTEST_ACTION_HD_MATRIX,
     DEV_AUTOTEST_ACTION_HD_DOOR,
     DEV_AUTOTEST_ACTION_HD_COUNTS,
+    DEV_AUTOTEST_ACTION_HD_CHECK_DOOR,
+    DEV_AUTOTEST_ACTION_HD_CHECK_SETTING,
+    DEV_AUTOTEST_ACTION_HD_INIT_SETTING,
 };
 
 struct DevAutotestStep {
@@ -748,10 +751,34 @@ static const DevAutotestStep kDevAutotestHdSteps[] = {
     { DEV_AUTOTEST_ACTION_WALK, 3, 0, 0, 150, "hd02_walk" },
     { DEV_AUTOTEST_ACTION_CHECK_WALK, 0, 0, 0, 1, "hd03_walked" },
     { DEV_AUTOTEST_ACTION_HD_DOOR, 0, 0, 0, 120, "hd04_door" },
+    { DEV_AUTOTEST_ACTION_HD_CHECK_DOOR, 0, 0, 0, 1, "hd04b_opened" },
     { DEV_AUTOTEST_ACTION_HUD_TAP, HUD_ELEMENT(Highlight), 0, 0, 20, "hd05_highlight" },
     { DEV_AUTOTEST_ACTION_START_COMBAT, 0, 0, 0, 40, "hd06_combat" },
     { DEV_AUTOTEST_ACTION_KEEP_COMBAT, 0, 0, 0, 1, "hd07_keep_combat" },
     { DEV_AUTOTEST_ACTION_HD_COUNTS, 0, 0, 0, 1, "hd08_counts" },
+};
+
+static const DevAutotestStep kDevAutotestHdSettingsSteps[] = {
+    { DEV_AUTOTEST_ACTION_HD_INIT_SETTING, 0, 0, 0, 1, "hs00_initial" },
+    { DEV_AUTOTEST_ACTION_WAIT_MAP_LOADED, 1800, 0, 0, 30, "hs00_loaded" },
+    { DEV_AUTOTEST_ACTION_BACK, 0, 0, 0, 20, "hs01_menu" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "hs02_settings", "menu.settings" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "hs03_graphics", "prefs.sections.4" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 10, "hs04_off", "prefs.rows.400" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 10, "hs05_apply", "prefs.apply" },
+    { DEV_AUTOTEST_ACTION_HD_CHECK_SETTING, 0, 0, 0, 1, "hs06_saved_off" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 10, "hs07_on", "prefs.rows.400" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 10, "hs08_apply", "prefs.apply" },
+    { DEV_AUTOTEST_ACTION_HD_CHECK_SETTING, 1, 0, 0, 1, "hs09_saved_on" },
+};
+
+static const DevAutotestStep kDevAutotestHdDarkSteps[] = {
+    { DEV_AUTOTEST_ACTION_WAIT_MAP_LOADED, 1800, 0, 0, 30, "hd00_loaded" },
+    { DEV_AUTOTEST_ACTION_HD_MATRIX, 0, 0, 0, 1, "hd01_matrix" },
+    { DEV_AUTOTEST_ACTION_SET_DARK_BOOST, 0, 0, 0, 45, "l00_original" },
+    { DEV_AUTOTEST_ACTION_SET_DARK_BOOST, 2, 0, 0, 10, "l01_medium" },
+    { DEV_AUTOTEST_ACTION_SET_DARK_BOOST, 3, 0, 0, 10, "l02_high" },
+    { DEV_AUTOTEST_ACTION_HUD_TAP, HUD_ELEMENT(Highlight), 0, 0, 30, "l03_highlight" },
 };
 
 static const DevAutotestStep kDevAutotestDarkSteps[] = {
@@ -3074,6 +3101,12 @@ void devAutotestSetScenario(const char* name)
     if (strcmp(name, "hd") == 0) {
         gDevAutotestSteps = kDevAutotestHdSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestHdSteps) / sizeof(kDevAutotestHdSteps[0]);
+    } else if (strcmp(name, "hd-settings") == 0) {
+        gDevAutotestSteps = kDevAutotestHdSettingsSteps;
+        gDevAutotestStepCount = sizeof(kDevAutotestHdSettingsSteps) / sizeof(kDevAutotestHdSettingsSteps[0]);
+    } else if (strcmp(name, "hd-dark") == 0) {
+        gDevAutotestSteps = kDevAutotestHdDarkSteps;
+        gDevAutotestStepCount = sizeof(kDevAutotestHdDarkSteps) / sizeof(kDevAutotestHdDarkSteps[0]);
     } else if (strcmp(name, "graphics") == 0) {
         gDevAutotestSteps = kDevAutotestGraphicsSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestGraphicsSteps) / sizeof(kDevAutotestGraphicsSteps[0]);
@@ -3627,78 +3660,157 @@ static void devAutotestLogItems()
 static void devAutotestHdManifest()
 {
     std::set<std::string> paths;
-    for (int e=0;e<ELEVATION_COUNT;e++) for (int i=0;i<SQUARE_GRID_SIZE;i++) {
-        int fid=_square[e]->tileFid[i];
-        paths.insert(TileFrmId(FloorTileFrmId(fid).frameId<TileFrameId>()).filePath());
-        paths.insert(TileFrmId(RoofTileFrmId(fid).frameId<TileFrameId>()).filePath());
-    }
-    for (Object* obj=objectFindFirst(); obj; obj=objectFindNext()) {
+    for (int e = 0; e < ELEVATION_COUNT; e++)
+        for (int i = 0; i < SQUARE_GRID_SIZE; i++) {
+            int fid = _square[e]->tileFid[i];
+            paths.insert(TileFrmId(FloorTileFrmId(fid).frameId<TileFrameId>()).filePath());
+            paths.insert(TileFrmId(RoofTileFrmId(fid).frameId<TileFrameId>()).filePath());
+        }
+    for (Object* obj = objectFindFirst(); obj; obj = objectFindNext()) {
         const FrmId id(obj);
-        if (id.objectType()==OBJ_TYPE_INTERFACE || id.objectType()==OBJ_TYPE_HEAD || id.objectType()==OBJ_TYPE_MISC) continue;
+        if (id.objectType() == OBJ_TYPE_INTERFACE || id.objectType() == OBJ_TYPE_HEAD || id.objectType() == OBJ_TYPE_MISC) continue;
         paths.insert(id.filePath());
     }
-    std::string name=gDevAutotestOutputPath+"/art-manifest.txt";
-    FILE* out=fopen(name.c_str(),"w");
+    std::string name = gDevAutotestOutputPath + "/art-manifest.txt";
+    FILE* out = fopen(name.c_str(), "w");
     if (!out) exit(EXIT_FAILURE);
-    for (const auto& path:paths) fprintf(out,"%s\n",path.c_str());
+    for (const auto& path : paths)
+        fprintf(out, "%s\n", path.c_str());
     fclose(out);
-    devAutotestLog("HD manifest: %zu map art names\n",paths.size());
+    devAutotestLog("HD manifest: %zu map art names\n", paths.size());
 }
 
 static std::vector<unsigned char> devAutotestHdReadback()
 {
     worldViewEnsureRendered();
+    int w, h;
+    SDL_GetRendererOutputSize(gSdlRenderer, &w, &h);
+    SDL_Texture* target = SDL_CreateTexture(gSdlRenderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_TARGET, w, h);
+    if (!target) exit(EXIT_FAILURE);
+    SDL_Texture* previous = SDL_GetRenderTarget(gSdlRenderer);
+    if (SDL_SetRenderTarget(gSdlRenderer, target) != 0) exit(EXIT_FAILURE);
+    SDL_SetRenderDrawColor(gSdlRenderer, 0, 0, 0, 255);
+    SDL_RenderClear(gSdlRenderer);
     worldViewRender(gSdlRenderer);
     SDL_RenderFlush(gSdlRenderer);
-    int w,h; SDL_GetRendererOutputSize(gSdlRenderer,&w,&h);
-    std::vector<unsigned char> pixels(static_cast<size_t>(w)*h*4);
-    if (SDL_RenderReadPixels(gSdlRenderer,nullptr,SDL_PIXELFORMAT_ABGR8888,pixels.data(),w*4)!=0) exit(EXIT_FAILURE);
+    std::vector<unsigned char> pixels(static_cast<size_t>(w) * h * 4);
+    if (SDL_RenderReadPixels(gSdlRenderer, nullptr, SDL_PIXELFORMAT_ABGR8888, pixels.data(), w * 4) != 0) exit(EXIT_FAILURE);
+    static int readback = 0;
+    size_t opaqueColors = 0;
+    for (size_t i = 0; i < pixels.size(); i += 4)
+        if (pixels[i] || pixels[i + 1] || pixels[i + 2]) ++opaqueColors;
+    devAutotestLog("HD world readback %d target_restored=%d nonblack=%zu\n", readback, SDL_GetRenderTarget(gSdlRenderer) == target, opaqueColors);
+    std::string path = gDevAutotestOutputPath + "/hd_world_" + std::to_string(readback++) + ".png";
+    lodepng::encode(path, pixels, w, h, LCT_RGBA, 8);
+    SDL_SetRenderTarget(gSdlRenderer, previous);
+    SDL_DestroyTexture(target);
     return pixels;
 }
 
 static void devAutotestHdMatrix()
 {
     devAutotestHdManifest();
-    int width=worldViewGetWidth(),height=worldViewGetHeight();
-    size_t size=static_cast<size_t>(width)*height;
-    settings.graphics.hd_art=false; hdWorldSettingsChanged();
-    std::vector<unsigned char> indexed(worldViewGetBuffer(),worldViewGetBuffer()+size);
-    auto off=devAutotestHdReadback();
-    devAutotestCaptureNextFrame("hd_off"); renderPresent();
-    settings.graphics.hd_art=true; hdWorldSettingsChanged(); hdWorldResetCounts(); tileWindowRefresh();
-    auto on=devAutotestHdReadback();
-    devAutotestCaptureNextFrame("hd_on"); renderPresent();
-    uint64_t hd,fallback; hdWorldGetCounts(&hd,&fallback);
-    devAutotestLog("HD installed=%d active=%d HD=%llu fallback=%llu\n",hdWorldInstalled(),hdWorldActive(),(unsigned long long)hd,(unsigned long long)fallback);
+    int outputWidth, outputHeight;
+    SDL_GetRendererOutputSize(gSdlRenderer, &outputWidth, &outputHeight);
+    SDL_RendererInfo rendererInfo;
+    SDL_GetRendererInfo(gSdlRenderer, &rendererInfo);
+    devAutotestLog("HD renderer=%s logical=%dx%d output=%dx%d zoom=%.3f filter=%d cache_mb=%d\n", rendererInfo.name, screenGetWidth(), screenGetHeight(), outputWidth, outputHeight, worldViewGetZoom(), settings.world_view.filter, settings.graphics.hd_cache_mb);
+    int width = worldViewGetWidth(), height = worldViewGetHeight();
+    size_t size = static_cast<size_t>(width) * height;
+    settings.graphics.hd_art = false;
+    hdWorldSettingsChanged();
+    std::vector<unsigned char> indexed(worldViewGetBuffer(), worldViewGetBuffer() + size);
+    auto off = devAutotestHdReadback();
+    devAutotestCaptureNextFrame("hd_off");
+    renderPresent();
+    settings.graphics.hd_art = true;
+    hdWorldSettingsChanged();
+    hdWorldResetCounts();
+    tileWindowRefresh();
+    auto on = devAutotestHdReadback();
+    devAutotestCaptureNextFrame("hd_on");
+    renderPresent();
+    uint64_t hd, fallback;
+    hdWorldGetCounts(&hd, &fallback);
+    devAutotestLog("HD installed=%d active=%d HD=%llu fallback=%llu\n", hdWorldInstalled(), hdWorldActive(), (unsigned long long)hd, (unsigned long long)fallback);
     // The same native renderer runs in parallel: HD must not alter any of
     // its indexed bytes, including clipping, lights and visibility.
-    bool sameIndexed=memcmp(indexed.data(),worldViewGetBuffer(),size)==0;
-    settings.graphics.hd_art=false; hdWorldSettingsChanged();
-    auto offAgain=devAutotestHdReadback();
-    bool sameOff=off==offAgain;
-    devAutotestLog("HD off round trip: indexed=%s displayed=%s; HD differs=%d\n",sameIndexed?"PASS":"FAIL",sameOff?"PASS":"FAIL",off!=on);
-    if (!sameIndexed || !sameOff || (hdWorldInstalled() && (hd==0 || off==on))) exit(EXIT_FAILURE);
-    FILE* csv=fopen((gDevAutotestOutputPath+"/hd-benchmark.csv").c_str(),"w");
-    if (!csv) exit(EXIT_FAILURE);
-    fprintf(csv,"hd,iterations,median_refresh_upload_submit_ms,p95_refresh_upload_submit_ms,median_cached_submit_ms\n");
-    for (bool enabled:{false,true}) {
-        settings.graphics.hd_art=enabled; hdWorldSettingsChanged();
-        std::vector<double> times,cached;
-        for (int i=0;i<32;i++) {
-            Uint64 start=SDL_GetPerformanceCounter();
-            tileWindowRefresh(); worldViewRender(gSdlRenderer); SDL_RenderFlush(gSdlRenderer);
-            double ms=(SDL_GetPerformanceCounter()-start)*1000.0/SDL_GetPerformanceFrequency();
-            start=SDL_GetPerformanceCounter();
-            worldViewRender(gSdlRenderer); SDL_RenderFlush(gSdlRenderer);
-            double c=(SDL_GetPerformanceCounter()-start)*1000.0/SDL_GetPerformanceFrequency();
-            if (i>=2) { times.push_back(ms); cached.push_back(c); }
+    bool sameIndexed = memcmp(indexed.data(), worldViewGetBuffer(), size) == 0;
+    if (hdWorldInstalled()) {
+        unsigned char palette[768];
+        memcpy(palette, directDrawGetPalette(), sizeof(palette));
+        unsigned char cycled[26 * 3];
+        for (int i = 0; i < 26; i++) {
+            cycled[i * 3] = 0;
+            cycled[i * 3 + 1] = 63;
+            cycled[i * 3 + 2] = 0;
         }
-        std::sort(times.begin(),times.end()); std::sort(cached.begin(),cached.end());
-        fprintf(csv,"%d,30,%.5f,%.5f,%.5f\n",enabled,times[15],times[28],cached[15]);
-        devAutotestLog("HD frame time hd=%d median=%.5f p95=%.5f cached=%.5f ms\n",enabled,times[15],times[28],cached[15]);
+        auto cycleBefore = devAutotestHdReadback();
+        uint64_t beforeHd, beforeFallback;
+        hdWorldGetCounts(&beforeHd, &beforeFallback);
+        _setSystemPaletteEntries(cycled, 229, 254);
+        auto cycleAfter = devAutotestHdReadback();
+        uint64_t afterHd, afterFallback;
+        hdWorldGetCounts(&afterHd, &afterFallback);
+        bool noRedraw = beforeHd == afterHd && beforeFallback == afterFallback;
+        devAutotestLog("HD live cycling changes pixels=%d without map redraw=%s\n", cycleBefore != cycleAfter, noRedraw ? "PASS" : "FAIL");
+        Rect visible;
+        worldViewGetVisibleRect(&visible);
+        bool hasCycling = false;
+        for (int y = std::max(visible.top, 0); y <= std::min(visible.bottom, height - 1); y++)
+            for (int x = std::max(visible.left, 0); x <= std::min(visible.right, width - 1); x++) {
+                int index = worldViewGetBuffer()[static_cast<size_t>(y) * width + x];
+                hasCycling = hasCycling || (index >= 229 && index <= 254);
+            }
+        if (!noRedraw || (hasCycling && cycleBefore == cycleAfter)) exit(EXIT_FAILURE);
+        devAutotestCaptureNextFrame("hd_cycling");
+        renderPresent();
+        _setSystemPaletteEntries(palette + 229 * 3, 229, 254);
+        directDrawSetPalette(palette);
+        for (int preset = 0; preset < kColorPresetCount; preset++) {
+            screenSetColorPreset(preset);
+            std::string name = "hd_preset_" + std::string(graphicsColorPresetName(preset));
+            devAutotestCaptureNextFrame(name.c_str());
+            renderPresent();
+        }
+        screenSetColorPreset(0);
+    }
+    settings.graphics.hd_art = false;
+    hdWorldSettingsChanged();
+    auto offAgain = devAutotestHdReadback();
+    bool sameOff = off == offAgain;
+    devAutotestLog("HD off round trip: indexed=%s displayed=%s; HD differs=%d\n", sameIndexed ? "PASS" : "FAIL", sameOff ? "PASS" : "FAIL", off != on);
+    if (!sameIndexed || !sameOff || (hdWorldInstalled() && (hd == 0 || off == on))) exit(EXIT_FAILURE);
+    FILE* csv = fopen((gDevAutotestOutputPath + "/hd-benchmark.csv").c_str(), "w");
+    if (!csv) exit(EXIT_FAILURE);
+    fprintf(csv, "hd,iterations,median_refresh_upload_submit_ms,p95_refresh_upload_submit_ms,median_cached_submit_ms\n");
+    for (bool enabled : { false, true }) {
+        settings.graphics.hd_art = enabled;
+        hdWorldSettingsChanged();
+        std::vector<double> times, cached;
+        for (int i = 0; i < 32; i++) {
+            Uint64 start = SDL_GetPerformanceCounter();
+            tileWindowRefresh();
+            worldViewRender(gSdlRenderer);
+            SDL_RenderFlush(gSdlRenderer);
+            double ms = (SDL_GetPerformanceCounter() - start) * 1000.0 / SDL_GetPerformanceFrequency();
+            start = SDL_GetPerformanceCounter();
+            worldViewRender(gSdlRenderer);
+            SDL_RenderFlush(gSdlRenderer);
+            double c = (SDL_GetPerformanceCounter() - start) * 1000.0 / SDL_GetPerformanceFrequency();
+            if (i >= 2) {
+                times.push_back(ms);
+                cached.push_back(c);
+            }
+        }
+        std::sort(times.begin(), times.end());
+        std::sort(cached.begin(), cached.end());
+        fprintf(csv, "%d,30,%.5f,%.5f,%.5f\n", enabled, times[15], times[28], cached[15]);
+        devAutotestLog("HD frame time hd=%d median=%.5f p95=%.5f cached=%.5f ms\n", enabled, times[15], times[28], cached[15]);
     }
     fclose(csv);
-    settings.graphics.hd_art=true; hdWorldSettingsChanged();
+    settings.graphics.hd_art = true;
+    hdWorldSettingsChanged();
 }
 
 static void devAutotestGraphics()
@@ -3922,25 +4034,63 @@ void devAutotestTick()
 
         Rect visibleRect;
         switch (step->action) {
+        case DEV_AUTOTEST_ACTION_HD_INIT_SETTING:
+            settings.graphics.hd_art = true;
+            settingsSave();
+            hdWorldSettingsChanged();
+            break;
+        case DEV_AUTOTEST_ACTION_HD_CHECK_SETTING: {
+            Config disk;
+            bool enabled = false;
+            bool ok = configInit(&disk) && configRead(&disk, gGameConfigFilePath, false)
+                && configGetBool(&disk, "graphics", "hd_art", &enabled);
+            ok = ok && enabled == (step->a != 0) && settings.graphics.hd_art == enabled
+                && hdWorldActive() == (enabled && hdWorldInstalled());
+            configFree(&disk);
+            devAutotestLog("HD Preferences persisted enabled=%d: %s\n", enabled, ok ? "PASS" : "FAIL");
+            if (!ok) exit(EXIT_FAILURE);
+            break;
+        }
         case DEV_AUTOTEST_ACTION_HD_MATRIX:
             devAutotestHdMatrix();
             break;
+        case DEV_AUTOTEST_ACTION_HD_CHECK_DOOR: {
+            Object* door = devAutotestFindNearestDoor();
+            bool open = door && (door->data.scenery.door.openFlags & DOOR_FLAG_OPEN) != 0;
+            devAutotestLog("HD door animation opened: %s\n", open ? "PASS" : "FAIL");
+            if (!open) exit(EXIT_FAILURE);
+            break;
+        }
         case DEV_AUTOTEST_ACTION_HD_COUNTS: {
-            uint64_t hd,fallback; hdWorldGetCounts(&hd,&fallback);
-            devAutotestLog("HD final draws HD=%llu fallback=%llu combat=%d\n",(unsigned long long)hd,(unsigned long long)fallback,isInCombat());
+            uint64_t hd, fallback;
+            hdWorldGetCounts(&hd, &fallback);
+            devAutotestLog("HD final draws HD=%llu fallback=%llu combat=%d\n", (unsigned long long)hd, (unsigned long long)fallback, isInCombat());
+            if (!isInCombat()) {
+                devAutotestLog("FAIL: HD combat did not start\n");
+                exit(EXIT_FAILURE);
+            }
             break;
         }
         case DEV_AUTOTEST_ACTION_HD_DOOR: {
-            Object* door=devAutotestFindNearestDoor();
-            if (!door) { devAutotestLog("FAIL: no HD test door\n"); exit(EXIT_FAILURE); }
-            int tile=tileGetTileInDirection(door->tile,ROTATION_SE,1);
+            Object* door = devAutotestFindNearestDoor();
+            if (!door) {
+                devAutotestLog("FAIL: no HD test door\n");
+                exit(EXIT_FAILURE);
+            }
+            int tile = tileGetTileInDirection(door->tile, ROTATION_SE, 1);
             Rect dirty;
-            objectSetLocation(gDude,tile,gDude->elevation,&dirty);
-            tileSetCenter(door->tile,TILE_SET_CENTER_REFRESH_WINDOW);
-            playerPrimaryAction(door);
-            int rc=0;
-            devAutotestLog("HD door pid=%d use=%d\n",door->pid,rc);
-            if (rc==-1) { devAutotestLog("FAIL: HD door use\n"); exit(EXIT_FAILURE); }
+            objectSetLocation(gDude, tile, gDude->elevation, &dirty);
+            tileSetCenter(door->tile, TILE_SET_CENTER_REFRESH_WINDOW);
+            // CE: Make this a door animation test, independent of Arroyo's
+            // scripted lock or a particular mod's key quest.
+            objectUnlock(door);
+            objectUnjamLock(door);
+            int rc = objectUseDoor(gDude, door, false);
+            devAutotestLog("HD door pid=%d use=%d\n", door->pid, rc);
+            if (rc == -1) {
+                devAutotestLog("FAIL: HD door use\n");
+                exit(EXIT_FAILURE);
+            }
             break;
         }
         case DEV_AUTOTEST_ACTION_GRAPHICS:
