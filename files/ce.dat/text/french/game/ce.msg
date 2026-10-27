@@ -11,3 +11,7 @@
 {397}{}{Faible}
 {398}{}{Moyen}
 {399}{}{Fort}
+
+# CE: HD map art
+{400}{}{Illustrations HD}
+{401}{}{Afficher les illustrations du monde en couleur a 2x, si installees}

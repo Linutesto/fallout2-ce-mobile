@@ -1469,6 +1469,12 @@ static int gameDbInit()
 
     sfallLoadMods();
 
+    // CE: Mounted below loose patches: data/hd overrides individual PNGs.
+    std::string hdDat = settings.system.master_dat_path;
+    size_t hdSlash = hdDat.find_last_of("/\\");
+    hdDat = hdSlash == std::string::npos ? "hd.dat" : hdDat.substr(0, hdSlash + 1) + "hd.dat";
+    if (compat_access(hdDat.c_str(), 0) == 0) dbOpen(hdDat.c_str());
+
     if (critter_patches_path != nullptr) {
         dbOpen(critter_patches_path);
     }

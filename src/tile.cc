@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "art.h"
+#include "hd_world.h"
 #include "color.h"
 #include "debug.h"
 #include "draw.h"
@@ -773,6 +774,8 @@ static void tileRefreshMapper(Rect* rect, int elevation)
     Rect renderRect = rectToUpdate;
     bool didClear = checkRectNeedsClear(&rectToUpdate, hasVisArea, &visArea);
 
+    if (didClear) hdWorldClear(rectToUpdate);
+
     // HRP EdgeClipping: when clipped, clear only if CheckRect; otherwise always clear.
     if (didClear) {
         bufferFill(gTileWindowBuffer + gTileWindowPitch * rectToUpdate.top + rectToUpdate.left,
@@ -827,6 +830,8 @@ static void tileRefreshGame(Rect* rect, int elevation)
 
     Rect renderRect = rectToUpdate;
     bool didClear = checkRectNeedsClear(&rectToUpdate, hasVisArea, &visArea);
+
+    if (didClear) hdWorldClear(rectToUpdate);
 
     // HRP EdgeClipping: when clipped, clear only if CheckRect; otherwise always clear.
     if (didClear) {
@@ -1597,6 +1602,7 @@ static void tileRenderRoof(const TileFrmId& frmId, int x, int y, Rect* rect, int
                 for (int i = 0; i < 4; i++) {
                     Rect* cr = &(rects[i]);
                     if (cr->left <= cr->right && cr->top <= cr->bottom) {
+                        hdWorldDraw(frmId, tileFrm, 0, 0, x, y, *cr, light);
                         _dark_trans_buf_to_buf(tileFrmBuffer + tileWidth * (cr->top - tileRect.top) + (cr->left - tileRect.left),
                             cr->right - cr->left + 1,
                             cr->bottom - cr->top + 1,
@@ -1614,6 +1620,12 @@ static void tileRenderRoof(const TileFrmId& frmId, int x, int y, Rect* rect, int
                 unsigned char* eggBuf = artGetFrameData(eggFrm);
                 unsigned char* roofSrc = tileFrmBuffer + tileWidth * (intersectedRect.top - tileRect.top) + (intersectedRect.left - tileRect.left);
                 unsigned char* eggMask = eggBuf + eggWidth * (intersectedRect.top - eggRect.top) + (intersectedRect.left - eggRect.left);
+                HdDrawOptions hdOptions;
+                hdOptions.mask = eggBuf;
+                hdOptions.maskPitch = eggWidth;
+                hdOptions.maskX = eggRect.left;
+                hdOptions.maskY = eggRect.top;
+                hdWorldDraw(frmId, tileFrm, 0, 0, x, y, intersectedRect, light, hdOptions);
                 _intensity_mask_buf_to_buf(roofSrc,
                     intersectedRect.right - intersectedRect.left + 1,
                     intersectedRect.bottom - intersectedRect.top + 1,
@@ -1625,6 +1637,7 @@ static void tileRenderRoof(const TileFrmId& frmId, int x, int y, Rect* rect, int
                     light);
                 objectSeeThroughMark(roofSrc, intersectedRect.right - intersectedRect.left + 1, intersectedRect.bottom - intersectedRect.top + 1, tileWidth, intersectedRect.left, intersectedRect.top, ObjectSeeThroughCover::Solid, eggMask, eggWidth);
             } else {
+                hdWorldDraw(frmId, tileFrm, 0, 0, x, y, tileRect, light);
                 _dark_trans_buf_to_buf(tileFrmBuffer, tileRect.right - tileRect.left + 1, tileRect.bottom - tileRect.top + 1, tileWidth, gTileWindowBuffer, tileRect.left, tileRect.top, gTileWindowPitch, light);
                 objectSeeThroughMark(tileFrmBuffer, tileRect.right - tileRect.left + 1, tileRect.bottom - tileRect.top + 1, tileWidth, tileRect.left, tileRect.top, ObjectSeeThroughCover::Solid);
             }
@@ -1948,6 +1961,7 @@ static void tileRenderFloor(const TileFrmId& frmId, int x, int y, Rect* rect)
 
         if (v23 == 9) {
             unsigned char* buf = artGetFrameData(art);
+            hdWorldDraw(frmId, art, 0, 0, savedX, savedY, *rect, _verticies[0].intensity);
             _dark_trans_buf_to_buf(buf + frameWidth * v78 + v79, v77, v76, frameWidth, gTileWindowBuffer, x, y, gTileWindowPitch, _verticies[0].intensity);
             goto out;
         }
@@ -2059,6 +2073,11 @@ static void tileRenderFloor(const TileFrmId& frmId, int x, int y, Rect* rect)
                 }
             }
         }
+
+        HdDrawOptions hdOptions;
+        hdOptions.lightMap = _intensity_map + 160;
+        hdOptions.lightPitch = 80;
+        hdWorldDraw(frmId, art, 0, 0, savedX, savedY, *rect, 65536, hdOptions);
 
         unsigned char* v66 = gTileWindowBuffer + gTileWindowPitch * y + x;
         unsigned char* v67 = artGetFrameData(art) + frameWidth * v78 + v79;

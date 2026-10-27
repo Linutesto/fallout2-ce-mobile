@@ -29,6 +29,7 @@
 #include "game.h"
 #include "game_config.h"
 #include "graphics.h"
+#include "hd_world.h"
 #include "game_commands.h"
 #include "game_dialog.h"
 #include "game_mouse.h"
@@ -477,6 +478,9 @@ enum DevAutotestAction {
     DEV_AUTOTEST_ACTION_TOUCH_LONG_PRESS_DOOR,
     // a - [graphics] dark_boost; logs the real and drawn ambient light.
     DEV_AUTOTEST_ACTION_SET_DARK_BOOST,
+    DEV_AUTOTEST_ACTION_HD_MATRIX,
+    DEV_AUTOTEST_ACTION_HD_DOOR,
+    DEV_AUTOTEST_ACTION_HD_COUNTS,
 };
 
 struct DevAutotestStep {
@@ -738,6 +742,18 @@ static const DevAutotestStep kDevAutotestDoorAttackSteps[] = {
 // A dark map (run with --dev-map of a cave) drawn as the game, then with the
 // dark boost, then with the highlight on (doors, ladders and containers too
 // with the profile's [Highlighting]).
+static const DevAutotestStep kDevAutotestHdSteps[] = {
+    { DEV_AUTOTEST_ACTION_WAIT_MAP_LOADED, 1800, 0, 0, 30, "hd00_loaded" },
+    { DEV_AUTOTEST_ACTION_HD_MATRIX, 0, 0, 0, 1, "hd01_matrix" },
+    { DEV_AUTOTEST_ACTION_WALK, 3, 0, 0, 150, "hd02_walk" },
+    { DEV_AUTOTEST_ACTION_CHECK_WALK, 0, 0, 0, 1, "hd03_walked" },
+    { DEV_AUTOTEST_ACTION_HD_DOOR, 0, 0, 0, 120, "hd04_door" },
+    { DEV_AUTOTEST_ACTION_HUD_TAP, HUD_ELEMENT(Highlight), 0, 0, 20, "hd05_highlight" },
+    { DEV_AUTOTEST_ACTION_START_COMBAT, 0, 0, 0, 40, "hd06_combat" },
+    { DEV_AUTOTEST_ACTION_KEEP_COMBAT, 0, 0, 0, 1, "hd07_keep_combat" },
+    { DEV_AUTOTEST_ACTION_HD_COUNTS, 0, 0, 0, 1, "hd08_counts" },
+};
+
 static const DevAutotestStep kDevAutotestDarkSteps[] = {
     { DEV_AUTOTEST_ACTION_SET_DARK_BOOST, 0, 0, 0, 45, "l00_original" },
     { DEV_AUTOTEST_ACTION_SET_DARK_BOOST, 2, 0, 0, 10, "l01_medium" },
@@ -3055,7 +3071,10 @@ static void devAutotestPrepareSaves()
 
 void devAutotestSetScenario(const char* name)
 {
-    if (strcmp(name, "graphics") == 0) {
+    if (strcmp(name, "hd") == 0) {
+        gDevAutotestSteps = kDevAutotestHdSteps;
+        gDevAutotestStepCount = sizeof(kDevAutotestHdSteps) / sizeof(kDevAutotestHdSteps[0]);
+    } else if (strcmp(name, "graphics") == 0) {
         gDevAutotestSteps = kDevAutotestGraphicsSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestGraphicsSteps) / sizeof(kDevAutotestGraphicsSteps[0]);
     } else if (strcmp(name, "story-guards") == 0) {
@@ -3603,6 +3622,85 @@ static void devAutotestLogItems()
     devAutotestLog("  global vars %08x\n", devAutotestChecksum(gGameGlobalVars, gGameGlobalVarsLength));
 }
 
+// CE: Export names from the loaded map (not just the visible camera), so
+// private stand-ins cover roofs and offscreen inhabitants as well.
+static void devAutotestHdManifest()
+{
+    std::set<std::string> paths;
+    for (int e=0;e<ELEVATION_COUNT;e++) for (int i=0;i<SQUARE_GRID_SIZE;i++) {
+        int fid=_square[e]->tileFid[i];
+        paths.insert(TileFrmId(FloorTileFrmId(fid).frameId<TileFrameId>()).filePath());
+        paths.insert(TileFrmId(RoofTileFrmId(fid).frameId<TileFrameId>()).filePath());
+    }
+    for (Object* obj=objectFindFirst(); obj; obj=objectFindNext()) {
+        const FrmId id(obj);
+        if (id.objectType()==OBJ_TYPE_INTERFACE || id.objectType()==OBJ_TYPE_HEAD || id.objectType()==OBJ_TYPE_MISC) continue;
+        paths.insert(id.filePath());
+    }
+    std::string name=gDevAutotestOutputPath+"/art-manifest.txt";
+    FILE* out=fopen(name.c_str(),"w");
+    if (!out) exit(EXIT_FAILURE);
+    for (const auto& path:paths) fprintf(out,"%s\n",path.c_str());
+    fclose(out);
+    devAutotestLog("HD manifest: %zu map art names\n",paths.size());
+}
+
+static std::vector<unsigned char> devAutotestHdReadback()
+{
+    worldViewEnsureRendered();
+    worldViewRender(gSdlRenderer);
+    SDL_RenderFlush(gSdlRenderer);
+    int w,h; SDL_GetRendererOutputSize(gSdlRenderer,&w,&h);
+    std::vector<unsigned char> pixels(static_cast<size_t>(w)*h*4);
+    if (SDL_RenderReadPixels(gSdlRenderer,nullptr,SDL_PIXELFORMAT_ABGR8888,pixels.data(),w*4)!=0) exit(EXIT_FAILURE);
+    return pixels;
+}
+
+static void devAutotestHdMatrix()
+{
+    devAutotestHdManifest();
+    int width=worldViewGetWidth(),height=worldViewGetHeight();
+    size_t size=static_cast<size_t>(width)*height;
+    settings.graphics.hd_art=false; hdWorldSettingsChanged();
+    std::vector<unsigned char> indexed(worldViewGetBuffer(),worldViewGetBuffer()+size);
+    auto off=devAutotestHdReadback();
+    devAutotestCaptureNextFrame("hd_off"); renderPresent();
+    settings.graphics.hd_art=true; hdWorldSettingsChanged(); hdWorldResetCounts(); tileWindowRefresh();
+    auto on=devAutotestHdReadback();
+    devAutotestCaptureNextFrame("hd_on"); renderPresent();
+    uint64_t hd,fallback; hdWorldGetCounts(&hd,&fallback);
+    devAutotestLog("HD installed=%d active=%d HD=%llu fallback=%llu\n",hdWorldInstalled(),hdWorldActive(),(unsigned long long)hd,(unsigned long long)fallback);
+    // The same native renderer runs in parallel: HD must not alter any of
+    // its indexed bytes, including clipping, lights and visibility.
+    bool sameIndexed=memcmp(indexed.data(),worldViewGetBuffer(),size)==0;
+    settings.graphics.hd_art=false; hdWorldSettingsChanged();
+    auto offAgain=devAutotestHdReadback();
+    bool sameOff=off==offAgain;
+    devAutotestLog("HD off round trip: indexed=%s displayed=%s; HD differs=%d\n",sameIndexed?"PASS":"FAIL",sameOff?"PASS":"FAIL",off!=on);
+    if (!sameIndexed || !sameOff || (hdWorldInstalled() && (hd==0 || off==on))) exit(EXIT_FAILURE);
+    FILE* csv=fopen((gDevAutotestOutputPath+"/hd-benchmark.csv").c_str(),"w");
+    if (!csv) exit(EXIT_FAILURE);
+    fprintf(csv,"hd,iterations,median_refresh_upload_submit_ms,p95_refresh_upload_submit_ms,median_cached_submit_ms\n");
+    for (bool enabled:{false,true}) {
+        settings.graphics.hd_art=enabled; hdWorldSettingsChanged();
+        std::vector<double> times,cached;
+        for (int i=0;i<32;i++) {
+            Uint64 start=SDL_GetPerformanceCounter();
+            tileWindowRefresh(); worldViewRender(gSdlRenderer); SDL_RenderFlush(gSdlRenderer);
+            double ms=(SDL_GetPerformanceCounter()-start)*1000.0/SDL_GetPerformanceFrequency();
+            start=SDL_GetPerformanceCounter();
+            worldViewRender(gSdlRenderer); SDL_RenderFlush(gSdlRenderer);
+            double c=(SDL_GetPerformanceCounter()-start)*1000.0/SDL_GetPerformanceFrequency();
+            if (i>=2) { times.push_back(ms); cached.push_back(c); }
+        }
+        std::sort(times.begin(),times.end()); std::sort(cached.begin(),cached.end());
+        fprintf(csv,"%d,30,%.5f,%.5f,%.5f\n",enabled,times[15],times[28],cached[15]);
+        devAutotestLog("HD frame time hd=%d median=%.5f p95=%.5f cached=%.5f ms\n",enabled,times[15],times[28],cached[15]);
+    }
+    fclose(csv);
+    settings.graphics.hd_art=true; hdWorldSettingsChanged();
+}
+
 static void devAutotestGraphics()
 {
     SDL_RendererInfo rendererInfo;
@@ -3824,6 +3922,27 @@ void devAutotestTick()
 
         Rect visibleRect;
         switch (step->action) {
+        case DEV_AUTOTEST_ACTION_HD_MATRIX:
+            devAutotestHdMatrix();
+            break;
+        case DEV_AUTOTEST_ACTION_HD_COUNTS: {
+            uint64_t hd,fallback; hdWorldGetCounts(&hd,&fallback);
+            devAutotestLog("HD final draws HD=%llu fallback=%llu combat=%d\n",(unsigned long long)hd,(unsigned long long)fallback,isInCombat());
+            break;
+        }
+        case DEV_AUTOTEST_ACTION_HD_DOOR: {
+            Object* door=devAutotestFindNearestDoor();
+            if (!door) { devAutotestLog("FAIL: no HD test door\n"); exit(EXIT_FAILURE); }
+            int tile=tileGetTileInDirection(door->tile,ROTATION_SE,1);
+            Rect dirty;
+            objectSetLocation(gDude,tile,gDude->elevation,&dirty);
+            tileSetCenter(door->tile,TILE_SET_CENTER_REFRESH_WINDOW);
+            playerPrimaryAction(door);
+            int rc=0;
+            devAutotestLog("HD door pid=%d use=%d\n",door->pid,rc);
+            if (rc==-1) { devAutotestLog("FAIL: HD door use\n"); exit(EXIT_FAILURE); }
+            break;
+        }
         case DEV_AUTOTEST_ACTION_GRAPHICS:
             devAutotestGraphics();
             break;

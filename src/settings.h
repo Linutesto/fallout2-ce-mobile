@@ -318,6 +318,12 @@ struct EnhancementSettings {
 };
 
 struct GraphicsSettings {
+    bool hd_art = true;
+#ifdef __ANDROID__
+    int hd_cache_mb = 256;
+#else
+    int hd_cache_mb = 1024;
+#endif
     std::string color_preset = "original";
     bool high_refresh = true;
     // Dark maps (caves, night) drawn brighter: 0 - as the game, 1..3 - the

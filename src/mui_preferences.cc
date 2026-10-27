@@ -16,6 +16,7 @@
 #include "fps_limiter.h"
 #include "game.h"
 #include "graphics.h"
+#include "hd_world.h"
 #include "game_sound.h"
 #include "input.h"
 #include "kb.h"
@@ -225,6 +226,7 @@ namespace {
         int mapFilter;
         int colorPreset;
         bool highRefresh;
+        bool hdArt;
         int darkBoost;
         bool autoOpenDoors;
         bool walkWhenSneaking;
@@ -251,6 +253,7 @@ namespace {
         values.mapFilter = settings.world_view.filter;
         values.colorPreset = graphicsColorPresetIndex(settings.graphics.color_preset.c_str());
         values.highRefresh = settings.graphics.high_refresh;
+        values.hdArt = settings.graphics.hd_art;
         values.darkBoost = settings.graphics.dark_boost;
         values.autoOpenDoors = settings.qol.auto_open_doors;
         values.walkWhenSneaking = settings.qol.walk_when_sneaking;
@@ -278,6 +281,7 @@ namespace {
         values.mapFilter = WorldViewSettings().filter;
         values.colorPreset = 0;
         values.highRefresh = GraphicsSettings().high_refresh;
+        values.hdArt = GraphicsSettings().hd_art;
         values.darkBoost = GraphicsSettings().dark_boost;
         QolSettings qol;
         values.autoOpenDoors = qol.auto_open_doors;
@@ -357,6 +361,10 @@ namespace {
         settings.graphics.color_preset = graphicsColorPresetName(values.colorPreset);
         screenSetColorPreset(values.colorPreset);
         screenSetHighRefresh(values.highRefresh);
+        if (settings.graphics.hd_art != values.hdArt) {
+            settings.graphics.hd_art = values.hdArt;
+            hdWorldSettingsChanged();
+        }
         if (settings.graphics.dark_boost != values.darkBoost) {
             settings.graphics.dark_boost = values.darkBoost;
             lightApplyDarkBoost();
@@ -691,6 +699,12 @@ namespace {
             Row row { Section::Graphics, RowKind::Toggle, kTextHighRefresh, "High refresh", Origin::Port, kTextHighRefreshNote, "Use the display rate for touch and UI; game speed stays the same" };
             row.get = [](const Values& values) { return values.highRefresh ? 1.0f : 0.0f; };
             row.set = [](Values& values, float value) { values.highRefresh = value != 0.0f; };
+            rows.push_back(row);
+        }
+        {
+            Row row { Section::Graphics, RowKind::Toggle, 400, "HD art", Origin::Port, 401, "Use installed 2x full-colour world art" };
+            row.get = [](const Values& values) { return values.hdArt ? 1.0f : 0.0f; };
+            row.set = [](Values& values, float value) { values.hdArt = value != 0.0f; };
             rows.push_back(row);
         }
         return rows;

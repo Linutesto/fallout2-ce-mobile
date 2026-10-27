@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "art.h"
+#include "hd_world.h"
 #include "graphics.h"
 #include "debug.h"
 #include "dev_autotest.h"
@@ -136,6 +137,7 @@ bool worldViewInit(int viewWidth, int viewHeight)
 
     memset(gWorldBuffer, 0, static_cast<size_t>(gWorldWidth) * gWorldHeight);
     worldTextureInit(gWorldBuffer, gWorldWidth, gWorldHeight);
+    hdWorldInit(gWorldWidth, gWorldHeight);
 
     gPanX = 0.0f;
     gPanY = 0.0f;
@@ -154,6 +156,7 @@ void worldViewExit()
         gWorldBuffer = nullptr;
     }
 
+    hdWorldExit();
     gWorldViewEnabled = false;
     gWorldViewWindow = -1;
     gOverlayObject = nullptr;
@@ -255,6 +258,7 @@ void worldViewInvalidatePalette(int first, int count)
     (void)first;
     (void)count;
     worldTexturePaletteChanged();
+    hdWorldPaletteChanged();
 }
 
 void worldViewScrolled(int dx, int dy)
@@ -264,6 +268,7 @@ void worldViewScrolled(int dx, int dy)
     }
 
     worldTextureScrolled(dx, dy);
+    hdWorldScrolled(dx, dy);
 
     // What was drawn moved with the contents.
     if (gDrawnRect.right >= gDrawnRect.left) {
@@ -698,6 +703,15 @@ static void worldViewDraw(SDL_Renderer* renderer)
     destRect.w = srcRect.w * gZoom;
     destRect.h = srcRect.h * gZoom;
 
+    if (hdWorldActive()) {
+        SDL_Rect clip = { 0, 0, gViewWidth, gViewHeight };
+        SDL_RenderSetClipRect(renderer, &clip);
+        bool presented = hdWorldPresent(renderer, srcRect, destRect);
+        if (presented) worldViewRenderOverlay(renderer, centerX, centerY);
+        SDL_RenderSetClipRect(renderer, nullptr);
+        if (presented) return;
+    }
+
     // Total scale from world pixels to physical pixels.
     float renderScaleX;
     float renderScaleY;
@@ -794,7 +808,10 @@ static void worldViewDraw(SDL_Renderer* renderer)
 
 void worldViewSetFilter(int filter)
 {
+    bool changed = gFilter != std::clamp(filter, 0, 4);
     gFilter = std::clamp(filter, 0, 4);
+    settings.world_view.filter = gFilter;
+    if (changed && hdWorldActive()) tileWindowRefresh();
     gComposeValid = false;
 }
 
@@ -935,6 +952,7 @@ static void worldViewRenderOverlay(SDL_Renderer* renderer, float centerX, float 
 
 void worldViewResetRenderer()
 {
+    hdWorldResetRenderer();
     if (gMagnifyTexture != nullptr) {
         SDL_DestroyTexture(gMagnifyTexture);
         gMagnifyTexture = nullptr;

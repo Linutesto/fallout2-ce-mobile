@@ -311,6 +311,8 @@ set(FALLOUT_ENGINE_SOURCES
     "src/dev_story_test.cc"
     "src/dev_autotest.h"
     "src/graphics.cc"
+    "src/hd_art.cc"
+    "src/hd_world.cc"
     "src/graphics.h"
     "src/world_view.cc"
     "src/world_view.h"
@@ -957,6 +959,10 @@ if(UNIX AND NOT ANDROID AND NOT IOS AND NOT CMAKE_SYSTEM_NAME MATCHES "Emscripte
         target_compile_options(${name} PRIVATE -UNDEBUG)
         add_test(NAME ${name} COMMAND ${name})
     endfunction()
+
+    ce_add_test(hd_art_test "src/hd_art.cc" "third_party/lodepng/lodepng.cpp")
+    target_include_directories(hd_art_test PRIVATE "third_party/lodepng")
+    ce_add_test(hd_pixels_test)
 
     ce_add_test(graphics_test "src/graphics.cc")
     target_compile_definitions(graphics_test PRIVATE GRAPHICS_REFERENCE="${CMAKE_CURRENT_SOURCE_DIR}/tests/graphics-reference.bin")

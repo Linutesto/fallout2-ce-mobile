@@ -12,6 +12,7 @@
 #include "animation.h"
 #include "animation_defs.h"
 #include "art.h"
+#include "hd_world.h"
 #include "color.h"
 #include "combat.h"
 #include "combat_ai.h"
@@ -1080,7 +1081,15 @@ void _obj_render_post_roof(Rect* rect, int elevation)
         gSeeThroughCover[offset] = static_cast<unsigned char>(ObjectSeeThroughCover::Top);
     }
 
+    std::vector<unsigned char> hdBefore;
+    int hdWidth = rectGetWidth(&updatedRect);
+    if (hdWorldActive()) {
+        hdBefore.resize(static_cast<size_t>(hdWidth) * rectGetHeight(&updatedRect));
+        for (int y=updatedRect.top; y<=updatedRect.bottom; y++)
+            memcpy(hdBefore.data()+(y-updatedRect.top)*hdWidth, gObjectsWindowBuffer+y*gObjectsWindowPitch+updatedRect.left, hdWidth);
+    }
     textObjectsRenderInRect(&updatedRect);
+    if (!hdBefore.empty()) hdWorldCopyIndexedChanges(updatedRect, hdBefore.data());
 
     ObjectListNode* objectListNode = gObjectListHead;
     while (objectListNode != nullptr) {
@@ -5237,6 +5246,10 @@ static void objectDrawOutline(Object* object, Rect* rect)
             animatedColorBandHeight = 0;
         }
 
+        hdWorldOutline(FrmId(object), art, object->frame, object->rotation,
+            object->sx, object->sy, *rect, color, animatedColorBandHeight,
+            animatedColorCount, isOutlinePalleted ? (outlineType == OUTLINE_TYPE_BODY ? COLOR_PALE_BLUE : COLOR_RED) : -1);
+
         Color outlineColor = color;
         unsigned char* destPtr = dest;
         unsigned char* srcPtr = src;
@@ -5575,6 +5588,7 @@ static void _obj_render_object(Object* object, Rect* rect, int light)
                         Rect* v21 = &(rects[i]);
                         if (v21->left <= v21->right && v21->top <= v21->bottom) {
                             unsigned char* sp = src + frameWidth * (v21->top - objectRect.top) + (v21->left - objectRect.left);
+                            hdWorldDraw(frmId, art, object->frame, object->rotation, object->sx, object->sy, *v21, light);
                             _dark_trans_buf_to_buf(sp, v21->right - v21->left + 1, v21->bottom - v21->top + 1, frameWidth, gObjectsWindowBuffer, v21->left, v21->top, gObjectsWindowPitch, light);
                             objectSeeThroughMark(sp, v21->right - v21->left + 1, v21->bottom - v21->top + 1, frameWidth, v21->left, v21->top, ObjectSeeThroughCover::Solid);
                         }
@@ -5583,6 +5597,12 @@ static void _obj_render_object(Object* object, Rect* rect, int light)
                     unsigned char* mask = artGetFrameData(egg);
                     unsigned char* eggSrc = src + frameWidth * (updatedEggRect.top - objectRect.top) + (updatedEggRect.left - objectRect.left);
                     unsigned char* eggMask = mask + eggWidth * (updatedEggRect.top - eggRect.top) + (updatedEggRect.left - eggRect.left);
+                    HdDrawOptions hdOptions;
+                    hdOptions.mask = mask;
+                    hdOptions.maskPitch = eggWidth;
+                    hdOptions.maskX = eggRect.left;
+                    hdOptions.maskY = eggRect.top;
+                    hdWorldDraw(frmId, art, object->frame, object->rotation, object->sx, object->sy, updatedEggRect, light, hdOptions);
                     _intensity_mask_buf_to_buf(
                         eggSrc,
                         updatedEggRect.right - updatedEggRect.left + 1,
@@ -5606,6 +5626,9 @@ static void _obj_render_object(Object* object, Rect* rect, int light)
 
     // CE: The tactical view (`objectSetSeeThrough`).
     if (objectIsSeeThrough(object, type)) {
+        HdDrawOptions hdOptions;
+        hdOptions.opacity = kSeeThroughOpacity * 255 / 100;
+        hdWorldDraw(frmId, art, object->frame, object->rotation, object->sx, object->sy, objectRect, light, hdOptions);
         objectDrawSeeThrough(src, objectWidth, objectHeight, frameWidth, gObjectsWindowBuffer, objectRect.left, objectRect.top, gObjectsWindowPitch, light);
         objectSeeThroughMark(src, objectWidth, objectHeight, frameWidth, objectRect.left, objectRect.top, ObjectSeeThroughCover::SeeThrough);
         artUnlock(cacheEntry);
@@ -5621,6 +5644,18 @@ static void _obj_render_object(Object* object, Rect* rect, int light)
         cover = ObjectSeeThroughCover::SeeThrough;
     }
     objectSeeThroughMark(src, objectWidth, objectHeight, frameWidth, objectRect.left, objectRect.top, cover);
+
+    HdDrawOptions hdOptions;
+    int hdLight = light;
+    switch (object->flags & OBJECT_FLAG_0xFC000) {
+    case OBJECT_TRANS_RED: hdOptions.tint = COLOR_RED; break;
+    case OBJECT_TRANS_WALL: hdOptions.tint = COLOR_PALE_BLUE; hdLight = 65536; break;
+    case OBJECT_TRANS_GLASS: hdOptions.tint = COLOR_CYAN; hdOptions.glass = true; break;
+    case OBJECT_TRANS_STEAM: hdOptions.tint = COLOR_WHITE; break;
+    case OBJECT_TRANS_ENERGY: hdOptions.tint = COLOR_YELLOW_GREEN; break;
+    default: break;
+    }
+    hdWorldDraw(frmId, art, object->frame, object->rotation, object->sx, object->sy, objectRect, hdLight, hdOptions);
 
     switch (object->flags & OBJECT_FLAG_0xFC000) {
     case OBJECT_TRANS_RED:

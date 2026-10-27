@@ -392,6 +392,8 @@ void screenLayersSetBlitSource(const unsigned char* layers)
 static bool gScreenPaletteChanged[256];
 
 static double gShadowLift = 1.0;
+static Uint32 gWorldDisplayLut[32 * 32 * 32];
+static unsigned char gWorldDisplayChannels[3][256];
 static unsigned char gShadowLiftTable[256];
 
 static Uint32 screenLiftShadows(Uint32 color)
@@ -415,7 +417,56 @@ static void screenUpdatePalette(int first, int count)
         gScreenPalette[index] = color;
     }
 
+    // CE: The HD surface keeps RGB precision through composition. A small
+    // trilinear display LUT applies the same gamma, fade, grade and lift.
+    if (first == 0 && count == 256) {
+        double sumBase[3] = {}, sumNow[3] = {};
+        for (int i = 1; i < 229; i++) for (int c = 0; c < 3; c++) {
+            sumBase[c] += _currentGammaTable[std::min<int>(_cmap[i*3+c],63)] * 4;
+            sumNow[c] += c == 0 ? colors[i].r : c == 1 ? colors[i].g : colors[i].b;
+        }
+        for (int c=0;c<3;c++) for (int v=0;v<256;v++) {
+            int lo=std::min(v/4,63), hi=std::min(lo+1,63);
+            int gamma=_currentGammaTable[lo]*(4-v%4)+_currentGammaTable[hi]*(v%4);
+            double fade=sumBase[c]>0 ? sumNow[c]/sumBase[c] : 1.0;
+            gWorldDisplayChannels[c][v]=std::clamp<int>(std::lround(gamma*fade),0,255);
+        }
+        for (int r=0;r<32;r++) for (int g=0;g<32;g++) for (int b=0;b<32;b++) {
+            int values[] = { r*255/31, g*255/31, b*255/31 };
+            Uint32 color = 0xFF000000;
+            for (int c=0;c<3;c++) {
+                int v=values[c], lo=std::min(v/4,63), hi=std::min(lo+1,63);
+                int gamma=(_currentGammaTable[lo]*(4-v%4)+_currentGammaTable[hi]*(v%4));
+                double fade=sumBase[c]>0 ? sumNow[c]/sumBase[c] : 1.0;
+                color |= std::clamp<int>(std::lround(gamma*fade),0,255) << (16-c*8);
+            }
+            gWorldDisplayLut[(r*32+g)*32+b]=screenLiftShadows(graphicsGradeColor(color,gColorPreset));
+        }
+    }
     worldViewInvalidatePalette(first, count);
+}
+
+Uint32 screenTransformWorldColor(Uint32 color)
+{
+    int r=(color>>16)&255, g=(color>>8)&255, b=color&255;
+    if (gColorPreset == 0) return screenLiftShadows(0xFF000000
+        | (gWorldDisplayChannels[0][r]<<16) | (gWorldDisplayChannels[1][g]<<8) | gWorldDisplayChannels[2][b]);
+    int coords[] = { r*31, g*31, b*31 };
+    int sums[3] = {};
+    for (int i=0;i<8;i++) {
+        int c[3], weight=1;
+        for (int j=0;j<3;j++) {
+            int fraction=coords[j]%255;
+            bool high=(i&(1<<j))!=0;
+            c[j]=std::min(coords[j]/255+(high?1:0),31);
+            // CE: Quantize weights to 8 steps; the RGB results stay 8-bit.
+            int f=(fraction*8+127)/255;
+            weight*=high?f:8-f;
+        }
+        Uint32 entry=gWorldDisplayLut[(c[0]*32+c[1])*32+c[2]];
+        for (int j=0;j<3;j++) sums[j]+=((entry>>(16-j*8))&255)*weight;
+    }
+    return 0xFF000000 | ((sums[0]+256)/512<<16) | ((sums[1]+256)/512<<8) | ((sums[2]+256)/512);
 }
 
 const Uint32* screenGetPalette()

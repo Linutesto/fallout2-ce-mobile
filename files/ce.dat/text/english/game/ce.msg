@@ -318,3 +318,7 @@
 {397}{}{Low}
 {398}{}{Medium}
 {399}{}{High}
+
+# CE: HD map art
+{400}{}{HD art}
+{401}{}{Use installed 2x full-colour world art}
