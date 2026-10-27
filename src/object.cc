@@ -862,7 +862,7 @@ void _obj_render_pre_roof(Rect* rect, int elevation)
         return;
     }
 
-    int ambientIntensity = lightGetAmbientIntensity();
+    int ambientIntensity = lightGetDrawnAmbientIntensity();
     int minX = updatedRect.left - 320;
     int minY = updatedRect.top - 240;
     int maxX = updatedRect.right + 320;

@@ -36,6 +36,7 @@
 #include "object.h"
 #include "party_member.h"
 #include "pipboy.h"
+#include "proto.h"
 #include "proto_types.h"
 #include "settings.h"
 #include "sfall_ini.h"
@@ -1011,9 +1012,12 @@ namespace {
     // held) with the same rules and colors, toggled instead of held. Own
     // options in the same section: IncludeNoHighlight=1 - also objects the
     // game keeps out of highlighting (the mod only lets containers through),
-    // ExcludePids=a,b,... - protos never outlined.
+    // ExcludePids=a,b,... - protos never outlined, Scenery=1 - also doors,
+    // stairs, ladders and elevators (OutlineColorScenery).
     struct HighlightConfig {
         bool containers = false;
+        bool scenery = false;
+        int sceneryColor = 8;
         bool corpses = false;
         bool critters = false;
         bool checkLineOfSight = false;
@@ -1048,6 +1052,9 @@ namespace {
         config.containers = highlightOption("Containers", 0) != 0;
         config.corpses = highlightOption("Corpses", 0) != 0;
         config.critters = highlightOption("Critters", 0) != 0;
+        config.scenery = highlightOption("Scenery", 0) != 0;
+        config.sceneryColor = highlightOption("OutlineColorScenery", 8);
+        if (config.sceneryColor < 1) config.sceneryColor = 8;
         config.checkLineOfSight = highlightOption("CheckLOS", 0) != 0;
         config.includeNoHighlight = highlightOption("IncludeNoHighlight", 0) != 0;
         config.motionScanner = highlightOption("MotionScanner", 0);
@@ -1105,6 +1112,20 @@ namespace {
         }
 
         ObjectType type = FrmId(object).objectType();
+        if (type == OBJ_TYPE_SCENERY) {
+            if (!config.scenery) {
+                return 0;
+            }
+            Proto* proto;
+            if (protoGetProto(ProtoId(object), &proto) == -1 || proto->scenery.type == SCENERY_TYPE_GENERIC) {
+                return 0;
+            }
+            if (config.checkLineOfSight && !dudeCanSee(object)) {
+                return 0;
+            }
+            return config.sceneryColor;
+        }
+
         if (type == OBJ_TYPE_ITEM) {
             bool container = itemGetType(object) == ITEM_TYPE_CONTAINER;
             if (container && !config.containers) {

@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <cmath>
 
 #include <SDL.h>
 #ifdef __ANDROID__
@@ -390,12 +391,26 @@ void screenLayersSetBlitSource(const unsigned char* layers)
 // all cycling entries when any of them moves).
 static bool gScreenPaletteChanged[256];
 
+static double gShadowLift = 1.0;
+static unsigned char gShadowLiftTable[256];
+
+static Uint32 screenLiftShadows(Uint32 color)
+{
+    if (gShadowLift == 1.0) {
+        return color;
+    }
+    return (color & 0xFF000000)
+        | (gShadowLiftTable[(color >> 16) & 0xFF] << 16)
+        | (gShadowLiftTable[(color >> 8) & 0xFF] << 8)
+        | gShadowLiftTable[color & 0xFF];
+}
+
 static void screenUpdatePalette(int first, int count)
 {
     SDL_Color* colors = gSdlSurface->format->palette->colors;
     memset(gScreenPaletteChanged, 0, sizeof(gScreenPaletteChanged));
     for (int index = first; index < first + count; index++) {
-        Uint32 color = graphicsGradeColor(0xFF000000 | (colors[index].r << 16) | (colors[index].g << 8) | colors[index].b, gColorPreset);
+        Uint32 color = screenLiftShadows(graphicsGradeColor(0xFF000000 | (colors[index].r << 16) | (colors[index].g << 8) | colors[index].b, gColorPreset));
         gScreenPaletteChanged[index] = gScreenPalette[index] != color;
         gScreenPalette[index] = color;
     }
@@ -411,6 +426,22 @@ const Uint32* screenGetPalette()
 void screenSetColorPreset(int preset)
 {
     gColorPreset = std::clamp(preset, 0, kColorPresetCount - 1);
+    if (gSdlSurface != nullptr) {
+        screenUpdatePalette(0, 256);
+        screenConvertRect(0, 0, gSdlSurface->w, gSdlSurface->h);
+    }
+}
+
+void screenSetShadowLift(double lift)
+{
+    lift = std::clamp(lift, 1.0, 3.0);
+    if (lift == gShadowLift) {
+        return;
+    }
+    gShadowLift = lift;
+    for (int value = 0; value < 256; value++) {
+        gShadowLiftTable[value] = static_cast<unsigned char>(std::lround(std::pow(value / 255.0, 1.0 / lift) * 255.0));
+    }
     if (gSdlSurface != nullptr) {
         screenUpdatePalette(0, 256);
         screenConvertRect(0, 0, gSdlSurface->w, gSdlSurface->h);

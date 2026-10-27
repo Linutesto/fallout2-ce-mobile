@@ -320,6 +320,10 @@ struct EnhancementSettings {
 struct GraphicsSettings {
     std::string color_preset = "original";
     bool high_refresh = true;
+    // Dark maps (caves, night) drawn brighter: 0 - as the game, 1..3 - the
+    // least ambient light drawn is 45%, 60%, 75%. Only the picture; sneaking
+    // and the game's own light checks still see the real light.
+    int dark_boost = 0;
 };
 
 // CE: Zoomable map view, see world_view.h.

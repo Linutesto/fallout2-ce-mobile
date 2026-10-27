@@ -39,6 +39,7 @@
 #include "inventory.h"
 #include "item.h"
 #include "kb.h"
+#include "light.h"
 #include "loadsave.h"
 #include "map.h"
 #include "map_hints.h"
@@ -474,6 +475,8 @@ enum DevAutotestAction {
     DEV_AUTOTEST_ACTION_MOVE_NEAR_DOOR,
     // Long press on the nearest door (its radial menu).
     DEV_AUTOTEST_ACTION_TOUCH_LONG_PRESS_DOOR,
+    // a - [graphics] dark_boost; logs the real and drawn ambient light.
+    DEV_AUTOTEST_ACTION_SET_DARK_BOOST,
 };
 
 struct DevAutotestStep {
@@ -730,6 +733,16 @@ static const DevAutotestStep kDevAutotestDoorAttackSteps[] = {
     { DEV_AUTOTEST_ACTION_TOUCH_TAP_RADIAL, GAME_MOUSE_ACTION_MENU_ITEM_COUNT, 0, 0, 300, "d06_throw" },
     { DEV_AUTOTEST_ACTION_LOG_COMBAT, 0, 0, 0, 1, "d07_combat" },
     { DEV_AUTOTEST_ACTION_LOG_INVENTORY, 0, 0, 0, 1, "d08_inventory" },
+};
+
+// A dark map (run with --dev-map of a cave) drawn as the game, then with the
+// dark boost, then with the highlight on (doors, ladders and containers too
+// with the profile's [Highlighting]).
+static const DevAutotestStep kDevAutotestDarkSteps[] = {
+    { DEV_AUTOTEST_ACTION_SET_DARK_BOOST, 0, 0, 0, 45, "l00_original" },
+    { DEV_AUTOTEST_ACTION_SET_DARK_BOOST, 2, 0, 0, 10, "l01_medium" },
+    { DEV_AUTOTEST_ACTION_SET_DARK_BOOST, 3, 0, 0, 10, "l02_high" },
+    { DEV_AUTOTEST_ACTION_HUD_TAP, HUD_ELEMENT(Highlight), 0, 0, 30, "l03_highlight" },
 };
 
 static const DevAutotestStep kDevAutotestHudAttackSteps[] = {
@@ -3375,6 +3388,9 @@ void devAutotestSetScenario(const char* name)
     } else if (strcmp(name, "doorattack") == 0) {
         gDevAutotestSteps = kDevAutotestDoorAttackSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestDoorAttackSteps) / sizeof(kDevAutotestDoorAttackSteps[0]);
+    } else if (strcmp(name, "dark") == 0) {
+        gDevAutotestSteps = kDevAutotestDarkSteps;
+        gDevAutotestStepCount = sizeof(kDevAutotestDarkSteps) / sizeof(kDevAutotestDarkSteps[0]);
     } else if (strcmp(name, "hudattack") == 0) {
         gDevAutotestSteps = kDevAutotestHudAttackSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestHudAttackSteps) / sizeof(kDevAutotestHudAttackSteps[0]);
@@ -6340,6 +6356,11 @@ void devAutotestTick()
             }
             break;
         }
+        case DEV_AUTOTEST_ACTION_SET_DARK_BOOST:
+            settings.graphics.dark_boost = static_cast<int>(step->a);
+            lightApplyDarkBoost();
+            devAutotestLog("%s: dark_boost=%d ambient=%d drawn=%d\n", step->name, settings.graphics.dark_boost, lightGetAmbientIntensity(), lightGetDrawnAmbientIntensity());
+            break;
         case DEV_AUTOTEST_ACTION_EQUIP_ITEM: {
             Object* item;
             if (objectCreateWithProtoId(&item, ProtoId(static_cast<int>(step->a))) == 0) {

@@ -1410,7 +1410,7 @@ void tileRenderRoofsInRect(Rect* rect, int elevation)
         minY = gSquareGridHeight - 1;
     }
 
-    int light = lightGetAmbientIntensity();
+    int light = lightGetDrawnAmbientIntensity();
 
     int baseSquareTile = gSquareGridWidth * minY;
 
@@ -1931,7 +1931,7 @@ static void tileRenderFloor(const TileFrmId& frmId, int x, int y, Rect* rect)
     tile = tileFromScreenXY(savedX, savedY + 13);
     if (tile != -1) {
         int parity = tile & 1;
-        int ambientIntensity = lightGetAmbientIntensity();
+        int ambientIntensity = lightGetDrawnAmbientIntensity();
         for (int i = 0; i < 10; i++) {
             // NOTE: Calls `lightGetTileIntensity` twice.
             _verticies[i].intensity = std::max(lightGetTileIntensity(elev, tile + _verticies[i].offsets[parity]), ambientIntensity);

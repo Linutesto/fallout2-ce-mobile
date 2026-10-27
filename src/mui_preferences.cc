@@ -19,6 +19,7 @@
 #include "game_sound.h"
 #include "input.h"
 #include "kb.h"
+#include "light.h"
 #include "loadsave.h"
 #include "message.h"
 #include "platform/git_version.h"
@@ -26,6 +27,7 @@
 #include "preferences.h"
 #include "settings.h"
 #include "svga.h"
+#include "tile.h"
 #include "world_view.h"
 #include "xfile.h"
 
@@ -149,6 +151,12 @@ namespace {
     constexpr int kTextHighRefresh = 389;
     constexpr int kTextHighRefreshNote = 390;
     constexpr int kTextFilterNote = 391;
+    constexpr int kTextDarkBoost = 394;
+    constexpr int kTextDarkBoostNote = 395;
+    constexpr int kTextDarkBoostOff = 396;
+    constexpr int kTextDarkBoostLow = 397;
+    constexpr int kTextDarkBoostMedium = 398;
+    constexpr int kTextDarkBoostHigh = 399;
 
     // Where the port's source is (the about section, README).
     constexpr const char* kSourceUrl = "https://github.com/imbaner/fallout2-ce-mobile";
@@ -217,6 +225,7 @@ namespace {
         int mapFilter;
         int colorPreset;
         bool highRefresh;
+        int darkBoost;
         bool autoOpenDoors;
         bool walkWhenSneaking;
         bool fastAmmoLoad;
@@ -242,6 +251,7 @@ namespace {
         values.mapFilter = settings.world_view.filter;
         values.colorPreset = graphicsColorPresetIndex(settings.graphics.color_preset.c_str());
         values.highRefresh = settings.graphics.high_refresh;
+        values.darkBoost = settings.graphics.dark_boost;
         values.autoOpenDoors = settings.qol.auto_open_doors;
         values.walkWhenSneaking = settings.qol.walk_when_sneaking;
         values.fastAmmoLoad = settings.qol.fast_ammo_load;
@@ -268,6 +278,7 @@ namespace {
         values.mapFilter = WorldViewSettings().filter;
         values.colorPreset = 0;
         values.highRefresh = GraphicsSettings().high_refresh;
+        values.darkBoost = GraphicsSettings().dark_boost;
         QolSettings qol;
         values.autoOpenDoors = qol.auto_open_doors;
         values.walkWhenSneaking = qol.walk_when_sneaking;
@@ -346,6 +357,10 @@ namespace {
         settings.graphics.color_preset = graphicsColorPresetName(values.colorPreset);
         screenSetColorPreset(values.colorPreset);
         screenSetHighRefresh(values.highRefresh);
+        if (settings.graphics.dark_boost != values.darkBoost) {
+            settings.graphics.dark_boost = values.darkBoost;
+            lightApplyDarkBoost();
+        }
         settings.qol.auto_open_doors = values.autoOpenDoors;
         settings.qol.walk_when_sneaking = values.walkWhenSneaking;
         settings.qol.fast_ammo_load = values.fastAmmoLoad;
@@ -665,6 +680,14 @@ namespace {
             rows.push_back(row);
         }
         {
+            Row row { Section::Graphics, RowKind::Choice, kTextDarkBoost, "Dark areas", Origin::Port, kTextDarkBoostNote, "Caves and nights drawn brighter; sneaking still uses the real light" };
+            row.options = { kTextDarkBoostOff, kTextDarkBoostLow, kTextDarkBoostMedium, kTextDarkBoostHigh };
+            row.optionsFromCe = true;
+            row.get = [](const Values& values) { return static_cast<float>(values.darkBoost); };
+            row.set = [](Values& values, float value) { values.darkBoost = static_cast<int>(value); };
+            rows.push_back(row);
+        }
+        {
             Row row { Section::Graphics, RowKind::Toggle, kTextHighRefresh, "High refresh", Origin::Port, kTextHighRefreshNote, "Use the display rate for touch and UI; game speed stays the same" };
             row.get = [](const Values& values) { return values.highRefresh ? 1.0f : 0.0f; };
             row.set = [](Values& values, float value) { values.highRefresh = value != 0.0f; };
@@ -764,6 +787,10 @@ namespace {
         if (row.optionsFromCe) {
             static const char* const kFilters[] = { "Pixels", "Smooth", "Sharp", "MMPX", "Scale3x" };
             static const char* const kPresets[] = { "Original", "OLED", "Warm", "Cold", "Night" };
+            static const char* const kDarkBoosts[] = { "Original", "Low", "Medium", "High" };
+            if (row.textId == kTextDarkBoost) {
+                return muiDecodeGameText(muiText(id, kDarkBoosts[index]));
+            }
             return muiDecodeGameText(muiText(id, row.textId == kTextColorPreset ? kPresets[index] : kFilters[index]));
         }
 

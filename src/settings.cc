@@ -415,6 +415,7 @@ void initSettingsRegistry(bool isMapper)
         value = graphicsColorPresetName(graphicsColorPresetIndex(value.c_str()));
     });
     SETTING(high_refresh);
+    SETTING_P(dark_boost, clamp(0, 3));
 #undef SECT
 
 #define SECT world_view

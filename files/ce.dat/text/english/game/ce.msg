@@ -310,3 +310,11 @@
 # Touch radial menu on doors (touch_controls.cc)
 {392}{}{Attack}
 {393}{}{Throw}
+
+# Graphics: dark areas (mui_preferences.cc)
+{394}{}{Dark areas}
+{395}{}{Caves and nights drawn brighter; sneaking still uses the real light}
+{396}{}{Original}
+{397}{}{Low}
+{398}{}{Medium}
+{399}{}{High}

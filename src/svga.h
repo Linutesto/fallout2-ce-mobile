@@ -46,6 +46,9 @@ unsigned char* directDrawGetPalette();
 // Display palette only; the game's 6-bit palette remains untouched.
 const Uint32* screenGetPalette();
 void screenSetColorPreset(int preset);
+// Brightens the display's dark colors: each channel c becomes c^(1/lift),
+// 1.0 - none (the dark boost, light.h).
+void screenSetShadowLift(double lift);
 void screenSetHighRefresh(bool enabled);
 void _GNW95_ShowRect(unsigned char* src, int src_pitch, int unused, int src_x, int src_y, int src_width, int src_height, int dest_x, int dest_y);
 void _GNW95_zero_vid_mem();

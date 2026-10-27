@@ -12,6 +12,11 @@ int lightInit();
 void lightReset();
 void lightExit();
 int lightGetAmbientIntensity();
+// Ambient light the map is drawn with: the real one raised by the dark boost
+// setting.
+int lightGetDrawnAmbientIntensity();
+// The dark boost setting changed: redraws the map with it.
+void lightApplyDarkBoost();
 void lightSetAmbientIntensity(int intensity, bool shouldUpdateScreen);
 int lightGetTileIntensity(int elevation, int tile);
 int lightGetTrueTileIntensity(int elevation, int tile);

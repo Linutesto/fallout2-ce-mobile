@@ -5,6 +5,8 @@
 #include "map_defs.h"
 #include "object.h"
 #include "perk.h"
+#include "settings.h"
+#include "svga.h"
 #include "tile.h"
 
 namespace fallout {
@@ -41,6 +43,27 @@ int lightGetAmbientIntensity()
     return gAmbientIntensity;
 }
 
+int lightGetDrawnAmbientIntensity()
+{
+    static constexpr int kFloors[] = { 0, LIGHT_INTENSITY_MAX * 45 / 100, LIGHT_INTENSITY_MAX * 60 / 100, LIGHT_INTENSITY_MAX * 75 / 100 };
+    return std::max(gAmbientIntensity, kFloors[std::clamp(settings.graphics.dark_boost, 0, 3)]);
+}
+
+// Dark maps also get their shadows lifted on the display: cave art is dark
+// even in full light.
+static void lightUpdateShadowLift()
+{
+    static constexpr double kLifts[] = { 1.0, 1.25, 1.45, 1.7 };
+    bool dark = gAmbientIntensity < LIGHT_INTENSITY_MAX * 9 / 10;
+    screenSetShadowLift(dark ? kLifts[std::clamp(settings.graphics.dark_boost, 0, 3)] : 1.0);
+}
+
+void lightApplyDarkBoost()
+{
+    lightUpdateShadowLift();
+    tileWindowRefresh();
+}
+
 // 0x47A908 light_set_ambient
 void lightSetAmbientIntensity(int intensity, bool shouldUpdateScreen)
 {
@@ -49,6 +72,7 @@ void lightSetAmbientIntensity(int intensity, bool shouldUpdateScreen)
 
     int oldAmbientIntensity = gAmbientIntensity;
     gAmbientIntensity = normalizedIntensity;
+    lightUpdateShadowLift();
 
     if (shouldUpdateScreen) {
         if (oldAmbientIntensity != normalizedIntensity) {
