@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -168,11 +169,17 @@ namespace {
 
     // CE: Only fallback sprites pass through the user's pixel-art filter. HD
     // pixels are never magnified by MMPX/Scale3x or smeared by that setting.
-    std::vector<uint32_t> fallbackPixels(const unsigned char* src, int w, int h)
+    std::vector<uint32_t> fallbackPixels(const unsigned char* src, int w, int h, int light, const HdDrawOptions& options)
     {
         std::vector<uint32_t> base(static_cast<size_t>(w) * h);
-        for (size_t i = 0; i < base.size(); i++)
-            base[i] = src[i] == 0 ? 0 : paletteColor(src[i], false);
+        for (size_t i = 0; i < base.size(); i++) {
+            unsigned char index = src[i];
+            if (index && options.tint < 0) {
+                int intensity = options.lightMap ? options.lightMap[(i / w) * options.lightPitch + i % w] : light;
+                index = hdLightIndex(index, intensity, reinterpret_cast<const unsigned char*>(intensityColorTable));
+            }
+            base[i] = src[i] == 0 ? 0 : paletteColor(index, false);
+        }
         std::vector<uint32_t> out(static_cast<size_t>(w) * h * 4);
         int filter = gFallbackFilter;
         if (filter == 3) {
@@ -228,8 +235,23 @@ void hdWorldInit(int width, int height)
         std::error_code error;
         std::filesystem::path path(base->path);
         if (devAutotestIsEnabled()) debugPrint("HD VFS base %s archive=%d\n", base->path, base->isDbase);
-        if ((!base->isDbase && std::filesystem::is_directory(path / "hd", error))
-            || (base->isDbase && path.filename() == "hd.dat")) gInstalled = true;
+        if (!base->isDbase) {
+            std::filesystem::recursive_directory_iterator it(path / "hd", std::filesystem::directory_options::skip_permission_denied, error), end;
+            while (!error && it != end && !gInstalled) {
+                std::string extension = it->path().extension().string();
+                for (char& c : extension)
+                    c = std::tolower(static_cast<unsigned char>(c));
+                if (extension == ".png" && it->is_regular_file(error)) gInstalled = true;
+                it.increment(error);
+            }
+        } else if (path.filename() == "hd.dat" && base->dbase) {
+            for (int i = 0; i < base->dbase->entriesLength && !gInstalled; i++) {
+                std::string name = base->dbase->entries[i].path;
+                for (char& c : name)
+                    c = c == '\\' ? '/' : std::tolower(static_cast<unsigned char>(c));
+                if (name.compare(0, 3, "hd/") == 0 && name.size() > 4 && name.substr(name.size() - 4) == ".png") gInstalled = true;
+            }
+        }
     }
     size_t budget = static_cast<size_t>(std::clamp(settings.graphics.hd_cache_mb, 0, 4096)) * 1024 * 1024;
     gCache = std::make_unique<HdFrameCache>(budget, readPng,
@@ -378,11 +400,27 @@ void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
     uint32_t cyclingPalette[256] = { };
     for (int i = 229; i <= 254; i++)
         cyclingPalette[i] = paletteColor(i);
-    auto fallback = hd ? nullptr : gCache->generated(std::string(id.filePath()) + ":" + std::to_string(rotation) + ":" + std::to_string(frame) + ":" + std::to_string(gFallbackFilter) + ":" + std::to_string(w) + "x" + std::to_string(h), [&]() {
+    // CE: Fallback art keeps the native palette's quantized lighting. Cache
+    // the lit frame before magnifying it; HD itself keeps linear RGB light.
+    std::string fallbackKey;
+    if (!hd) {
+        fallbackKey = std::string(id.filePath()) + ":" + std::to_string(rotation) + ":" + std::to_string(frame) + ":" + std::to_string(gFallbackFilter) + ":" + std::to_string(w) + "x" + std::to_string(h);
+        if (options.tint >= 0)
+            fallbackKey += ":unlit";
+        else if (!options.lightMap)
+            fallbackKey += ":" + std::to_string(std::clamp(light, 0, 65536) >> 9);
+        else {
+            fallbackKey += ":lit:";
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++)
+                    fallbackKey.push_back(original[y * w + x] ? std::clamp(options.lightMap[y * options.lightPitch + x], 0, 65536) >> 9 : 0);
+        }
+    }
+    auto fallback = hd ? nullptr : gCache->generated(fallbackKey, [&]() {
         auto image = std::make_shared<HdFrame>();
         image->width = w * 2;
         image->height = h * 2;
-        image->pixels = fallbackPixels(original, w, h);
+        image->pixels = fallbackPixels(original, w, h, light, options);
         return image;
     });
     const uint32_t* pixels = hd ? hd->pixels.data() : fallback->pixels.data();
@@ -405,7 +443,7 @@ void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
                 int retain = (7 - std::min(row, 7)) * 255 / 7 * std::clamp(intensity, 0, 65536) / 65536;
                 writePixel(destOffset, (blended & 0xFFFFFF) | (color & 0xFF000000), options.opacity, 0, retain);
             } else {
-                if (!hdIsCycling(index)) color = hdLight(color, intensity);
+                if (hd && !hdIsCycling(index)) color = hdLight(color, intensity);
                 int opacity = options.opacity;
                 if (options.mask) {
                     int mask = options.mask[(dy / 2 - options.maskY) * options.maskPitch + dx / 2 - options.maskX];

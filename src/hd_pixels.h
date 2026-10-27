@@ -15,6 +15,11 @@ inline uint32_t hdLight(uint32_t c, int intensity)
     return out;
 }
 inline bool hdIsCycling(unsigned char index) { return index >= 229 && index <= 254; }
+inline unsigned char hdLightIndex(unsigned char index, int intensity, const unsigned char* table)
+{
+    if (index == 0 || hdIsCycling(index)) return index;
+    return table[index * 256 + (std::clamp(intensity, 0, 65536) >> 9)];
+}
 inline uint32_t hdCyclePixel(uint32_t hd, unsigned char index, const uint32_t* palette)
 {
     return hdIsCycling(index) ? palette[index] : hd;

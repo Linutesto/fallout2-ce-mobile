@@ -10,6 +10,11 @@ int main()
     assert(hdLight(0x12345678, 999999) == 0x12345678);
     for (int i = 0; i < 256; i++)
         assert(hdIsCycling(i) == (i >= 229 && i <= 254));
+    unsigned char lightTable[256 * 256] = { };
+    lightTable[7 * 256 + 64] = 23;
+    assert(hdLightIndex(7, 32768, lightTable) == 23);
+    assert(hdLightIndex(0, 32768, lightTable) == 0);
+    assert(hdLightIndex(229, 32768, lightTable) == 229);
     uint32_t palette[256] = { };
     palette[229] = 0xFF00ABCD;
     assert(hdCyclePixel(0x12345678, 229, palette) == 0xFF00ABCD);
