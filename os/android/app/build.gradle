@@ -198,6 +198,10 @@ android {
             // beside the player's (its own files and saves).
             applicationIdSuffix project.findProperty('fallout2ce.phoneIdSuffix') ?: (project.hasProperty('fallout2ce.hd') ? '.hd' : '.debug')
             signingConfig signingConfigs.debug
+            // `-Pfallout2ce.bench`: debuggable, so the launcher takes autotest
+            // arguments (MainActivity.getArguments) for on-device benchmarks.
+            // Use with a phoneIdSuffix of its own, never over a player's app.
+            debuggable project.hasProperty('fallout2ce.bench')
             matchingFallbacks = ['release']
             externalNativeBuild {
                 cmake {
