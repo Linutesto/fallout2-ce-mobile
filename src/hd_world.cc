@@ -56,6 +56,9 @@ namespace {
     uint64_t gFallbackCount = 0;
     double gLastConvertMs = 0.0;
     double gLastUploadMs = 0.0;
+    bool gMeasureDraw = false;
+    Uint64 gLookupTicks = 0, gFallbackTicks = 0, gBuildTicks = 0, gPixelTicks = 0;
+    uint64_t gDrawCalls = 0;
 
     double elapsedMs(Uint64 from, Uint64 to)
     {
@@ -86,10 +89,10 @@ namespace {
         int alpha = ((color >> 24) * opacity + 127) / 255;
         if (alpha == 0) return;
         if (alpha == 255 && destinationWeight == 0) {
+            if (gCycleIndex[offset] == kMixedCycleIndex) gCycleMix.erase(offset);
             gPixels[offset] = color | 0xFF000000;
             gCycleIndex[offset] = cycle;
-            gCycleWeight[offset] = cycle ? 65535 : 0;
-            if (!gCycleMix.empty()) gCycleMix.erase(offset);
+            if (cycle) gCycleWeight[offset] = 65535;
             return;
         }
         if (cycle == 0 && gCycleIndex[offset] == 0) {
@@ -108,7 +111,7 @@ namespace {
             }
         } else {
             int old = gCycleIndex[offset];
-            int weight = static_cast<uint32_t>(gCycleWeight[offset]) * retain / 255;
+            int weight = old ? static_cast<uint32_t>(gCycleWeight[offset]) * retain / 255 : 0;
             if (cycle && old && old != cycle && weight) {
                 std::array<uint16_t, 26> mix = { };
                 mix[old - 229] = weight;
@@ -306,7 +309,7 @@ void hdWorldExit()
     gCycleWeight.clear();
     gCycleWeight.shrink_to_fit();
     gCycleMix.clear();
-    gCountedDraws.clear();
+    if (devAutotestIsEnabled() && !gMeasureDraw) gCountedDraws.clear();
     gCache.reset();
     gInstalled = false;
     gWidth = gHeight = 0;
@@ -321,6 +324,20 @@ void hdWorldGetCounts(uint64_t* hd, uint64_t* fallback)
 {
     *hd = gHdCount;
     *fallback = gFallbackCount;
+}
+void hdWorldBeginDrawTiming()
+{
+    gLookupTicks = gFallbackTicks = gBuildTicks = gPixelTicks = gDrawCalls = 0;
+    gMeasureDraw = true;
+}
+void hdWorldEndDrawTiming(double* lookupMs, double* fallbackMs, double* buildMs, double* pixelsMs, uint64_t* calls)
+{
+    gMeasureDraw = false;
+    *lookupMs = elapsedMs(0, gLookupTicks);
+    *fallbackMs = elapsedMs(0, gFallbackTicks);
+    *buildMs = elapsedMs(0, gBuildTicks);
+    *pixelsMs = elapsedMs(0, gPixelTicks);
+    *calls = gDrawCalls;
 }
 
 void hdWorldSetFilter(int filter)
@@ -428,13 +445,23 @@ void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
     int top = std::max({ y, clip.top, 0 }) * 2, bottom = std::min({ y + h, clip.bottom + 1, gHeight }) * 2;
     if (left >= right || top >= bottom) return;
     touch(left, top, right, bottom);
+    Uint64 phase = gMeasureDraw ? SDL_GetPerformanceCounter() : 0;
     auto hd = frameFor(id, frame, rotation, w, h);
-    std::string drawKey = std::string(id.filePath()) + ":" + std::to_string(rotation) + ":" + std::to_string(frame) + ":" + std::to_string(x) + ":" + std::to_string(y);
-    if (gCountedDraws.insert(drawKey).second) {
-        if (hd)
-            ++gHdCount;
-        else
-            ++gFallbackCount;
+    if (gMeasureDraw) {
+        gLookupTicks += SDL_GetPerformanceCounter() - phase;
+        phase = SDL_GetPerformanceCounter();
+        ++gDrawCalls;
+    }
+    // These counts are only consumed by the screenshot QA. Building a unique
+    // string for every visible tile on every real frame is otherwise wasted.
+    if (devAutotestIsEnabled() && !gMeasureDraw) {
+        std::string drawKey = std::string(id.filePath()) + ":" + std::to_string(rotation) + ":" + std::to_string(frame) + ":" + std::to_string(x) + ":" + std::to_string(y);
+        if (gCountedDraws.insert(drawKey).second) {
+            if (hd)
+                ++gHdCount;
+            else
+                ++gFallbackCount;
+        }
     }
     const unsigned char* original = artGetFrameData(art, frame, static_cast<Rotation>(rotation));
     uint32_t cyclingPalette[256] = { };
@@ -457,16 +484,22 @@ void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
         }
     }
     auto fallback = hd ? nullptr : gCache->generated(fallbackKey, [&]() {
+        Uint64 buildStart = gMeasureDraw ? SDL_GetPerformanceCounter() : 0;
         auto image = std::make_shared<HdFrame>();
         image->width = w * 2;
         image->height = h * 2;
         image->pixels = fallbackPixels(original, w, h, light, options);
+        if (gMeasureDraw) gBuildTicks += SDL_GetPerformanceCounter() - buildStart;
         return image;
     });
-    const uint32_t* pixels = hd ? hd->pixels.data() : fallback->pixels.data();
+    if (gMeasureDraw) {
+        gFallbackTicks += SDL_GetPerformanceCounter() - phase;
+        phase = SDL_GetPerformanceCounter();
+    }
     // CE: Most pixels of a refresh are opaque, unmasked and uncycled; they
     // take a direct store. Everything else goes through writePixel below.
     const bool plain = options.tint < 0 && !options.mask && options.opacity == 255;
+    const uint32_t* pixels = hd ? hd->pixels.data() : fallback->pixels.data();
     for (int dy = top; dy < bottom; dy++) {
         int sy = dy - y * 2;
         const unsigned char* sourceRow = original + (sy >> 1) * w;
@@ -484,10 +517,9 @@ void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
                     writePixel(destOffset, color);
                     continue;
                 }
+                if (gCycleIndex[destOffset] == kMixedCycleIndex) gCycleMix.erase(destOffset);
                 gPixels[destOffset] = color;
                 gCycleIndex[destOffset] = 0;
-                gCycleWeight[destOffset] = 0;
-                if (!gCycleMix.empty()) gCycleMix.erase(destOffset);
                 continue;
             }
             // Cycling comes from the source's index mask, even if the HD artist
@@ -514,6 +546,7 @@ void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
             }
         }
     }
+    if (gMeasureDraw) gPixelTicks += SDL_GetPerformanceCounter() - phase;
 }
 
 void hdWorldOutline(const FrmId& id, Art* art, int frame, int rotation,

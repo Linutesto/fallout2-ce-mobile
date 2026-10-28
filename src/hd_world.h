@@ -42,5 +42,8 @@ const uint32_t* hdWorldPixels();
 uint32_t hdWorldColorAt(int x2, int y2);
 void hdWorldResetCounts();
 void hdWorldGetCounts(uint64_t* hd, uint64_t* fallback);
+// Samples one complete tileWindowRefresh during the HD autotest benchmark.
+void hdWorldBeginDrawTiming();
+void hdWorldEndDrawTiming(double* lookupMs, double* fallbackMs, double* buildMs, double* pixelsMs, uint64_t* calls);
 } // namespace fallout
 #endif

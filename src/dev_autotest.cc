@@ -3783,15 +3783,19 @@ static void devAutotestHdMatrix()
     if (!sameIndexed || !sameOff || (hdWorldInstalled() && (hd == 0 || off == on))) exit(EXIT_FAILURE);
     FILE* csv = fopen((gDevAutotestOutputPath + "/hd-benchmark.csv").c_str(), "w");
     if (!csv) exit(EXIT_FAILURE);
-    fprintf(csv, "hd,iterations,median_refresh_upload_submit_ms,p95_refresh_upload_submit_ms,median_cached_submit_ms,median_draw_ms,median_present_ms,median_convert_ms,median_upload_api_ms,median_upload_submit_ms\n");
+    fprintf(csv, "hd,iterations,median_refresh_upload_submit_ms,p95_refresh_upload_submit_ms,median_cached_submit_ms,median_draw_ms,median_present_ms,median_convert_ms,median_upload_api_ms,median_upload_submit_ms,median_lookup_ms,median_fallback_ms,median_fallback_build_ms,median_pixels_ms,median_draw_calls\n");
     for (bool enabled : { false, true }) {
         settings.graphics.hd_art = enabled;
         hdWorldSettingsChanged();
-        std::vector<double> times, cached, draws, presents, converts, uploadApis, uploadSubmits;
+        std::vector<double> times, cached, draws, presents, converts, uploadApis, uploadSubmits, lookups, fallbacks, builds, pixelTimes, drawCalls;
         for (int i = 0; i < 32; i++) {
+            if (enabled) hdWorldBeginDrawTiming();
             Uint64 start = SDL_GetPerformanceCounter();
             tileWindowRefresh();
             Uint64 drawn = SDL_GetPerformanceCounter();
+            double lookup = 0, fallback = 0, build = 0, pixels = 0;
+            uint64_t calls = 0;
+            if (enabled) hdWorldEndDrawTiming(&lookup, &fallback, &build, &pixels, &calls);
             worldViewRender(gSdlRenderer);
             SDL_RenderFlush(gSdlRenderer);
             double ms = (SDL_GetPerformanceCounter() - start) * 1000.0 / SDL_GetPerformanceFrequency();
@@ -3811,12 +3815,17 @@ static void devAutotestHdMatrix()
                 converts.push_back(convert);
                 uploadApis.push_back(uploadApi);
                 uploadSubmits.push_back(ms - draw - convert);
+                lookups.push_back(lookup);
+                fallbacks.push_back(fallback);
+                builds.push_back(build);
+                pixelTimes.push_back(pixels);
+                drawCalls.push_back(static_cast<double>(calls));
             }
         }
-        for (auto* v : { &times, &cached, &draws, &presents, &converts, &uploadApis, &uploadSubmits })
+        for (auto* v : { &times, &cached, &draws, &presents, &converts, &uploadApis, &uploadSubmits, &lookups, &fallbacks, &builds, &pixelTimes, &drawCalls })
             std::sort(v->begin(), v->end());
-        fprintf(csv, "%d,30,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f\n", enabled, times[15], times[28], cached[15], draws[15], presents[15], converts[15], uploadApis[15], uploadSubmits[15]);
-        devAutotestLog("HD frame time hd=%d median=%.5f p95=%.5f cached=%.5f ms (draw %.5f, present %.5f, convert %.5f, upload_api %.5f, upload_submit %.5f)\n", enabled, times[15], times[28], cached[15], draws[15], presents[15], converts[15], uploadApis[15], uploadSubmits[15]);
+        fprintf(csv, "%d,30,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.0f\n", enabled, times[15], times[28], cached[15], draws[15], presents[15], converts[15], uploadApis[15], uploadSubmits[15], lookups[15], fallbacks[15], builds[15], pixelTimes[15], drawCalls[15]);
+        devAutotestLog("HD frame time hd=%d median=%.5f p95=%.5f cached=%.5f ms (draw %.5f, present %.5f, convert %.5f, upload_api %.5f, upload_submit %.5f, lookup %.5f, fallback %.5f, build %.5f, pixels %.5f, calls %.0f)\n", enabled, times[15], times[28], cached[15], draws[15], presents[15], converts[15], uploadApis[15], uploadSubmits[15], lookups[15], fallbacks[15], builds[15], pixelTimes[15], drawCalls[15]);
     }
     fclose(csv);
     settings.graphics.hd_art = true;
