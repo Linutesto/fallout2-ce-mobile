@@ -503,6 +503,8 @@ void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
     for (int dy = top; dy < bottom; dy++) {
         int sy = dy - y * 2;
         const unsigned char* sourceRow = original + (sy >> 1) * w;
+        int lightSourceX = -1;
+        int lightLeft = light, lightRight = light;
         const uint32_t* pixelRow = pixels + static_cast<size_t>(sy) * w * 2;
         size_t rowOffset = static_cast<size_t>(dy) * gWidth * 2;
         for (int dx = left; dx < right; dx++) {
@@ -527,7 +529,32 @@ void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
             color = hdCyclePixel(color, index, cyclingPalette);
             if ((color >> 24) == 0) continue;
             int intensity = light;
-            if (options.lightMap && index != 0) intensity = hdInterpolateLight(options.lightMap, options.lightPitch, w, h, sx, sy, original);
+            if (options.lightMap && index != 0) {
+                int px = sx >> 1, py = sy >> 1;
+                if (px != lightSourceX) {
+                    lightSourceX = px;
+                    int x1 = std::min(px + 1, w - 1);
+                    int center = options.lightMap[py * options.lightPitch + px];
+                    auto sample = [&](int xx, int yy) {
+                        return original[yy * w + xx] == 0 ? center : options.lightMap[yy * options.lightPitch + xx];
+                    };
+                    int right = sample(x1, py);
+                    if ((sy & 1) == 0) {
+                        lightLeft = center;
+                        lightRight = center == right ? center : (center * 2 + right * 2) / 4;
+                    } else {
+                        int y1 = std::min(py + 1, h - 1);
+                        int down = sample(px, y1), diagonal = sample(x1, y1);
+                        if (center == right && center == down && center == diagonal) {
+                            lightLeft = lightRight = center;
+                        } else {
+                            lightLeft = (center * 2 + down * 2) / 4;
+                            lightRight = (center + right + down + diagonal) / 4;
+                        }
+                    }
+                }
+                intensity = (sx & 1) ? lightRight : lightLeft;
+            }
             size_t destOffset = static_cast<size_t>(dy) * gWidth * 2 + dx;
             uint32_t& dest = gPixels[destOffset];
             if (options.tint >= 0) {
@@ -701,6 +728,20 @@ void hdWorldLastPresentTiming(double* convertMs, double* uploadMs)
 {
     *convertMs = gLastConvertMs;
     *uploadMs = gLastUploadMs;
+}
+
+void hdWorldPresentPathStats(bool* grayscale, size_t* cyclingPixels, int* threads)
+{
+    *grayscale = gGrayscale;
+    *threads = static_cast<int>(std::clamp(std::thread::hardware_concurrency(), 1u, 8u));
+    *cyclingPixels = 0;
+    // Called once after the timed QA samples, never during conversion.
+    for (int y = 0; y < gPresentedSource.h * 2; y++) {
+        size_t start = (static_cast<size_t>(gPresentedSource.y) * 2 + y) * gWidth * 2
+            + gPresentedSource.x * 2;
+        for (int x = 0; x < gPresentedSource.w * 2; x++)
+            *cyclingPixels += gCycleIndex[start + x] != 0;
+    }
 }
 
 void hdWorldResetRenderer()

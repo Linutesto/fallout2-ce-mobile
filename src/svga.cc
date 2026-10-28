@@ -472,6 +472,11 @@ Uint32 screenTransformWorldColor(Uint32 color, int preset)
     return screenLiftShadows(gWorldColorTransform.apply(gamma));
 }
 
+const char* screenWorldColorPath()
+{
+    return gWorldFastChannelsReady ? "channel_lut" : "rgb_grade";
+}
+
 const Uint32* screenGetPalette()
 {
     return gScreenPalette;

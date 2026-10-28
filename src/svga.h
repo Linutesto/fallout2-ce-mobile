@@ -46,6 +46,7 @@ unsigned char* directDrawGetPalette();
 // Display palette only; the game's 6-bit palette remains untouched.
 const Uint32* screenGetPalette();
 Uint32 screenTransformWorldColor(Uint32 color, int preset = -1);
+const char* screenWorldColorPath();
 void screenSetColorPreset(int preset);
 // Brightens the display's dark colors: each channel c becomes c^(1/lift),
 // 1.0 - none (the dark boost, light.h).

@@ -3825,7 +3825,11 @@ static void devAutotestHdMatrix()
         for (auto* v : { &times, &cached, &draws, &presents, &converts, &uploadApis, &uploadSubmits, &lookups, &fallbacks, &builds, &pixelTimes, &drawCalls })
             std::sort(v->begin(), v->end());
         fprintf(csv, "%d,30,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.0f\n", enabled, times[15], times[28], cached[15], draws[15], presents[15], converts[15], uploadApis[15], uploadSubmits[15], lookups[15], fallbacks[15], builds[15], pixelTimes[15], drawCalls[15]);
-        devAutotestLog("HD frame time hd=%d median=%.5f p95=%.5f cached=%.5f ms (draw %.5f, present %.5f, convert %.5f, upload_api %.5f, upload_submit %.5f, lookup %.5f, fallback %.5f, build %.5f, pixels %.5f, calls %.0f)\n", enabled, times[15], times[28], cached[15], draws[15], presents[15], converts[15], uploadApis[15], uploadSubmits[15], lookups[15], fallbacks[15], builds[15], pixelTimes[15], drawCalls[15]);
+        bool grayscale = false;
+        size_t cyclingPixels = 0;
+        int conversionThreads = 0;
+        if (enabled) hdWorldPresentPathStats(&grayscale, &cyclingPixels, &conversionThreads);
+        devAutotestLog("HD frame time hd=%d median=%.5f p95=%.5f cached=%.5f ms (draw %.5f, present %.5f, convert %.5f, upload_api %.5f, upload_submit %.5f, lookup %.5f, fallback %.5f, build %.5f, pixels %.5f, calls %.0f, color_path=%s, live_path=%s, cycle_pixels=%zu, threads=%d)\n", enabled, times[15], times[28], cached[15], draws[15], presents[15], converts[15], uploadApis[15], uploadSubmits[15], lookups[15], fallbacks[15], builds[15], pixelTimes[15], drawCalls[15], enabled ? screenWorldColorPath() : "indexed", grayscale ? "grayscale" : cyclingPixels ? "direct_plus_cycle" : "direct", cyclingPixels, conversionThreads);
     }
     fclose(csv);
     settings.graphics.hd_art = true;
