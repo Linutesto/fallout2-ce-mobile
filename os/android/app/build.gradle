@@ -98,6 +98,7 @@ android {
 
     defaultConfig {
         applicationId 'io.github.imbaner.fallout2ce'
+        buildConfigField 'boolean', 'HD_EDITION', project.hasProperty('fallout2ce.hd') ? 'true' : 'false'
         minSdk 24
         targetSdk 35
         // The CE version this port is based on, then the port's own build

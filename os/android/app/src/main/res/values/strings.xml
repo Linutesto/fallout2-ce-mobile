@@ -1,4 +1,13 @@
 <resources>
+    <string name="hd_update_title">HD art update</string>
+    <string name="hd_update_checking">Checking for new HD art…</string>
+    <string name="hd_update_offer">HD art update: %1$s, %2$.1f MB</string>
+    <string name="hd_update_more">%1$d pack(s) ready to download (%2$.1f MB total).</string>
+    <string name="hd_update_download">Download</string>
+    <string name="hd_update_later">Later</string>
+    <string name="hd_update_progress">%1$s: %2$d%%</string>
+    <string name="hd_update_installing">Installing HD art: %s…</string>
+    <string name="hd_update_check_menu">Check for HD art</string>
     <string name="app_name">Fallout 2 CE</string>
 
     <!-- ImportActivity: the game's files from the player's own copy. -->

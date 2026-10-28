@@ -107,6 +107,17 @@
                     android:textColor="@color/import_button_primary_text"
                     android:textSize="15sp" />
             </LinearLayout>
+            <Button
+                android:id="@+id/import_check_hd"
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/import_button"
+                android:text="@string/hd_update_check_menu"
+                android:textAllCaps="false"
+                android:textColor="@color/import_button_text"
+                android:textSize="14sp"
+                android:visibility="gone" />
         </LinearLayout>
     </FrameLayout>
 

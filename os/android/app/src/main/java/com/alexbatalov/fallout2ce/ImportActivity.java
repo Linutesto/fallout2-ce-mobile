@@ -46,6 +46,7 @@ public class ImportActivity extends Activity {
     private TextView progressText;
     private Button primary;
     private Button secondary;
+    private Button checkHdArt;
     private android.widget.ImageButton backToGame;
 
     private volatile boolean cancelled;
@@ -74,6 +75,11 @@ public class ImportActivity extends Activity {
         progressText = findViewById(R.id.import_progress_text);
         primary = findViewById(R.id.import_primary);
         secondary = findViewById(R.id.import_secondary);
+        checkHdArt = findViewById(R.id.import_check_hd);
+        checkHdArt.setOnClickListener(v -> {
+            startActivity(new Intent(this, HdUpdateActivity.class).putExtra(HdUpdateActivity.EXTRA_MANUAL, true));
+            finish();
+        });
         backToGame = findViewById(R.id.import_back);
         backToGame.setOnClickListener(v -> {
             closeQuietly(openSource);
@@ -138,6 +144,8 @@ public class ImportActivity extends Activity {
         secondary.setText(secondaryText);
         secondary.setOnClickListener(onSecondary);
         secondary.setVisibility(secondaryText != null ? View.VISIBLE : View.GONE);
+        checkHdArt.setVisibility(BuildConfig.HD_EDITION && replacing && !savesMode() && !busy
+            ? View.VISIBLE : View.GONE);
 
         // The gap between the buttons only when both are there: one alone
         // spans the panel like the progress above it.
@@ -372,7 +380,8 @@ public class ImportActivity extends Activity {
     }
 
     private void startGame() {
-        startActivity(new Intent(this, MainActivity.class));
+        // A first import should see newly published art before SDL starts too.
+        startActivity(new Intent(this, BuildConfig.HD_EDITION ? HdUpdateActivity.class : MainActivity.class));
         finish();
     }
 

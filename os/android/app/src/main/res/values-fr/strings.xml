@@ -1,0 +1,11 @@
+<resources>
+    <string name="hd_update_title">Mise à jour des graphismes HD</string>
+    <string name="hd_update_checking">Recherche de nouveaux graphismes HD…</string>
+    <string name="hd_update_offer">Graphismes HD : %1$s, %2$.1f Mo</string>
+    <string name="hd_update_more">%1$d packs à télécharger (%2$.1f Mo au total).</string>
+    <string name="hd_update_download">Télécharger</string>
+    <string name="hd_update_later">Plus tard</string>
+    <string name="hd_update_progress">%1$s : %2$d %%</string>
+    <string name="hd_update_installing">Installation des graphismes HD : %s…</string>
+    <string name="hd_update_check_menu">Vérifier les graphismes HD</string>
+</resources>
