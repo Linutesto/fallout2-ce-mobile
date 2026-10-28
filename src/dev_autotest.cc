@@ -3728,6 +3728,9 @@ static void devAutotestHdMatrix()
     hdWorldResetCounts();
     tileWindowRefresh();
     auto on = devAutotestHdReadback();
+    bool textureColors = hdWorldVerifyTextureColors(gSdlRenderer);
+    devAutotestLog("HD GPU texture RGB: %s\n", textureColors ? "PASS" : "FAIL");
+    if (!textureColors) exit(EXIT_FAILURE);
     devAutotestCaptureNextFrame("hd_on");
     renderPresent();
     uint64_t hd, fallback;

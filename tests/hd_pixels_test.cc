@@ -5,6 +5,8 @@ using namespace fallout;
 int main()
 {
     assert(hdLight(0x7FC86432, 32768) == 0x7F643219);
+    assert(hdLight(0xFF0C0C0C, 39321) == 0xFF070707);
+    assert(hdLight(0xFF102010, 39321) == 0xFF091309);
     assert(hdLight(0xFFFFFFFF, 65536) == 0xFFFFFFFF);
     assert(hdLight(0xABCDEF12, -1) == 0xAB000000);
     assert(hdLight(0x12345678, 999999) == 0x12345678);

@@ -9,10 +9,12 @@ inline uint32_t hdLight(uint32_t c, int intensity)
 {
     intensity = std::clamp(intensity, 0, 65536);
     if (intensity == 65536) return c;
-    // Red and blue in one 64-bit multiply; exact per-channel c * i / 65536.
-    uint64_t rb = ((static_cast<uint64_t>(c & 0xFF00FF) * intensity) >> 16) & 0xFF00FF;
-    uint32_t g = (((c >> 8) & 255) * static_cast<uint32_t>(intensity)) >> 16;
-    return (c & 0xFF000000) | static_cast<uint32_t>(rb) | (g << 8);
+    // Packed multiplication leaks fractional red bits into blue for many
+    // light levels (gray 0x0c0c0c at 39321 became blue 0x070733).
+    uint32_t result = c & 0xFF000000;
+    for (int shift : { 0, 8, 16 })
+        result |= ((((c >> shift) & 255) * static_cast<uint32_t>(intensity)) >> 16) << shift;
+    return result;
 }
 inline bool hdIsCycling(unsigned char index) { return index >= 229 && index <= 254; }
 inline unsigned char hdLightIndex(unsigned char index, int intensity, const unsigned char* table)

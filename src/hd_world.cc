@@ -659,9 +659,8 @@ bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FR
             debugPrint("HD view exceeds renderer texture limits; using indexed view\n");
             return false;
         }
-        // GLES2's UnlockTexture uploads the entire allocation even after a
-        // subrect lock. A static texture lets UpdateTexture upload only the
-        // converted dirty rectangle, without the streaming buffer copy.
+        // Upload only the converted dirty rectangle, preserving the faster
+        // static texture path after verifying its GPU channel order.
         gTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h);
         if (!gTexture) return false;
         SDL_SetTextureBlendMode(gTexture, SDL_BLENDMODE_NONE);
@@ -722,6 +721,38 @@ bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FR
     SDL_RenderCopyF(renderer, gTexture, &textureRect, &dest);
     gLastUploadMs += elapsedMs(copyStart, SDL_GetPerformanceCounter());
     return true;
+}
+
+// Dev QA: sample an actual GPU texture draw, not the CPU buffer used by PNG
+// comparisons. Choose a pixel with distinct red/blue so a channel swap fails.
+bool hdWorldVerifyTextureColors(SDL_Renderer* renderer)
+{
+    if (!gTexture || gPresentedSource.w <= 0 || gPresentedSource.h <= 0) return false;
+    int sampleX = 0, sampleY = 0, best = -1;
+    uint32_t expected = 0;
+    for (int y = 0; y < gPresentedSource.h * 2; y += 4)
+        for (int x = 0; x < gPresentedSource.w * 2; x += 4) {
+            size_t offset = (static_cast<size_t>(gPresentedSource.y) * 2 + y) * gWidth * 2 + gPresentedSource.x * 2 + x;
+            uint32_t color = screenTransformWorldColor(livePixel(offset));
+            int separation = std::abs(static_cast<int>((color >> 16) & 255) - static_cast<int>(color & 255));
+            if (separation > best) best = separation, sampleX = x, sampleY = y, expected = color;
+        }
+    if (best < 24) return false; // A gray-only sample would miss R/B swaps.
+    SDL_Texture* target = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_TARGET, 1, 1);
+    if (!target) return false;
+    SDL_Texture* previous = SDL_GetRenderTarget(renderer);
+    SDL_Rect src = { sampleX, sampleY, 1, 1 };
+    SDL_Rect dst = { 0, 0, 1, 1 };
+    unsigned char actual[4] = { };
+    bool ok = SDL_SetRenderTarget(renderer, target) == 0
+        && SDL_RenderCopy(renderer, gTexture, &src, &dst) == 0
+        && SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ABGR8888, actual, 4) == 0;
+    SDL_SetRenderTarget(renderer, previous);
+    SDL_DestroyTexture(target);
+    if (!ok) return false;
+    return std::abs(static_cast<int>(actual[0]) - static_cast<int>((expected >> 16) & 255)) <= 1
+        && std::abs(static_cast<int>(actual[1]) - static_cast<int>((expected >> 8) & 255)) <= 1
+        && std::abs(static_cast<int>(actual[2]) - static_cast<int>(expected & 255)) <= 1;
 }
 
 void hdWorldLastPresentTiming(double* convertMs, double* uploadMs)
