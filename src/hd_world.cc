@@ -6,6 +6,7 @@
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -43,10 +44,27 @@ namespace {
     std::unique_ptr<HdFrameCache> gCache;
     SDL_Texture* gTexture = nullptr;
     uint64_t gRevision = 1;
+    // CE: The part of the 2x buffer changed since the last present, so a
+    // walking critter re-converts its own rectangle instead of the screen.
+    bool gDirtyAll = true;
+    int gDirtyLeft = 0, gDirtyTop = 0, gDirtyRight = 0, gDirtyBottom = 0;
     uint64_t gPresentedRevision = 0;
     SDL_Rect gPresentedSource = { };
     uint64_t gHdCount = 0;
     uint64_t gFallbackCount = 0;
+
+    void touch(int left, int top, int right, int bottom)
+    {
+        if (left >= right || top >= bottom) return;
+        if (gDirtyLeft >= gDirtyRight) {
+            gDirtyLeft = left, gDirtyTop = top, gDirtyRight = right, gDirtyBottom = bottom;
+            return;
+        }
+        gDirtyLeft = std::min(gDirtyLeft, left);
+        gDirtyTop = std::min(gDirtyTop, top);
+        gDirtyRight = std::max(gDirtyRight, right);
+        gDirtyBottom = std::max(gDirtyBottom, bottom);
+    }
 
     uint32_t paletteColor(int index, bool cycling = false)
     {
@@ -136,6 +154,7 @@ namespace {
         gCycleIndex.assign(size, 0);
         gCycleWeight.assign(size, 0);
         gCycleMix.clear();
+        gDirtyAll = true;
     }
 
     bool readPng(const std::string& path, std::vector<unsigned char>& data)
@@ -320,6 +339,7 @@ void hdWorldClear(const Rect& rect)
     gGrayscale = false;
     gCountedDraws.clear();
     int left = std::max(rect.left, 0) * 2, right = std::min(rect.right + 1, gWidth) * 2;
+    touch(left, std::max(rect.top, 0) * 2, right, std::min(rect.bottom + 1, gHeight) * 2);
     for (int y = std::max(rect.top, 0) * 2; y < std::min(rect.bottom + 1, gHeight) * 2; y++) {
         size_t offset = static_cast<size_t>(y) * gWidth * 2;
         std::fill(gPixels.begin() + offset + left, gPixels.begin() + offset + right, 0xFF000000);
@@ -339,6 +359,7 @@ void hdWorldScrolled(int dx, int dy)
 {
     if (!hdWorldActive() || gPixels.empty()) return;
     ++gRevision;
+    gDirtyAll = true;
     int w = gWidth * 2, h = gHeight * 2;
     dx *= 2;
     dy *= 2;
@@ -364,6 +385,7 @@ void hdWorldPaletteChanged(int first, int count)
 {
     if (!hdWorldActive()) return;
     ++gRevision;
+    gDirtyAll = true;
     // CE: Partial updates are the cycle's unfaded palette. Full palette
     // changes are gamma/fades, applied once by the display transform.
     if (first > 0)
@@ -375,6 +397,7 @@ void hdWorldGrayscale()
     if (hdWorldActive()) {
         gGrayscale = true;
         ++gRevision;
+        gDirtyAll = true;
     }
 }
 
@@ -388,6 +411,7 @@ void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
     int left = std::max({ x, clip.left, 0 }) * 2, right = std::min({ x + w, clip.right + 1, gWidth }) * 2;
     int top = std::max({ y, clip.top, 0 }) * 2, bottom = std::min({ y + h, clip.bottom + 1, gHeight }) * 2;
     if (left >= right || top >= bottom) return;
+    touch(left, top, right, bottom);
     auto hd = frameFor(id, frame, rotation, w, h);
     std::string drawKey = std::string(id.filePath()) + ":" + std::to_string(rotation) + ":" + std::to_string(frame) + ":" + std::to_string(x) + ":" + std::to_string(y);
     if (gCountedDraws.insert(drawKey).second) {
@@ -424,11 +448,32 @@ void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
         return image;
     });
     const uint32_t* pixels = hd ? hd->pixels.data() : fallback->pixels.data();
-    for (int dy = top; dy < bottom; dy++)
+    // CE: Most pixels of a refresh are opaque, unmasked and uncycled; they
+    // take a direct store. Everything else goes through writePixel below.
+    const bool plain = options.tint < 0 && !options.mask && options.opacity == 255;
+    for (int dy = top; dy < bottom; dy++) {
+        int sy = dy - y * 2;
+        const unsigned char* sourceRow = original + (sy >> 1) * w;
+        const uint32_t* pixelRow = pixels + static_cast<size_t>(sy) * w * 2;
+        size_t rowOffset = static_cast<size_t>(dy) * gWidth * 2;
         for (int dx = left; dx < right; dx++) {
-            int sx = dx - x * 2, sy = dy - y * 2;
-            unsigned char index = original[(sy / 2) * w + sx / 2];
-            uint32_t color = pixels[static_cast<size_t>(sy) * w * 2 + sx];
+            int sx = dx - x * 2;
+            unsigned char index = sourceRow[sx >> 1];
+            uint32_t color = pixelRow[sx];
+            if (plain && !hdIsCycling(index)) {
+                if ((color >> 24) == 0) continue;
+                if (hd) color = hdLight(color, light);
+                size_t destOffset = rowOffset + dx;
+                if ((color >> 24) != 255) {
+                    writePixel(destOffset, color);
+                    continue;
+                }
+                gPixels[destOffset] = color;
+                gCycleIndex[destOffset] = 0;
+                gCycleWeight[destOffset] = 0;
+                if (!gCycleMix.empty()) gCycleMix.erase(destOffset);
+                continue;
+            }
             // Cycling comes from the source's index mask, even if the HD artist
             // painted a different color or alpha at this position.
             color = hdCyclePixel(color, index, cyclingPalette);
@@ -452,6 +497,7 @@ void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
                 writePixel(destOffset, color, opacity, hdIsCycling(index) ? index : 0);
             }
         }
+    }
 }
 
 void hdWorldOutline(const FrmId& id, Art* art, int frame, int rotation,
@@ -468,6 +514,8 @@ void hdWorldOutline(const FrmId& id, Art* art, int frame, int rotation,
     };
     int coverWidth = 0, coverHeight = 0, coverPitch = 0;
     const auto* cover = objectSeeThroughCover(&coverWidth, &coverHeight, &coverPitch);
+    touch(std::max({ x - 1, clip.left, 0 }) * 2, std::max({ y - 1, clip.top, 0 }) * 2,
+        std::min({ x + w + 1, clip.right + 1, gWidth }) * 2, std::min({ y + h + 1, clip.bottom + 1, gHeight }) * 2);
     for (int dy = std::max({ y - 1, clip.top, 0 }) * 2; dy < std::min({ y + h + 1, clip.bottom + 1, gHeight }) * 2; dy++)
         for (int dx = std::max({ x - 1, clip.left, 0 }) * 2; dx < std::min({ x + w + 1, clip.right + 1, gWidth }) * 2; dx++) {
             int sx = dx - x * 2, sy = dy - y * 2;
@@ -508,6 +556,7 @@ void hdWorldCopyIndexedChanges(const Rect& rect, const unsigned char* before)
     ++gRevision;
     int width = rect.right - rect.left + 1;
     const auto* buffer = worldViewGetBuffer();
+    touch(rect.left * 2, rect.top * 2, (rect.right + 1) * 2, (rect.bottom + 1) * 2);
     for (int y = rect.top; y <= rect.bottom; y++)
         for (int x = rect.left; x <= rect.right; x++) {
             int index = buffer[y * gWidth + x];
@@ -547,16 +596,39 @@ bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FR
         SDL_RenderCopyF(renderer, gTexture, &textureRect, &dest);
         return true;
     }
-    void* data;
-    int pitch;
-    if (SDL_LockTexture(gTexture, &textureRect, &data, &pitch) != 0) return false;
-    for (int y = 0; y < h; y++) {
-        uint32_t* row = reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(data) + y * pitch);
-        const uint32_t* src = gPixels.data() + (static_cast<size_t>(source.y) * 2 + y) * gWidth * 2 + source.x * 2;
-        for (int x = 0; x < w; x++)
-            row[x] = screenTransformWorldColor(livePixel(src - gPixels.data() + x));
+    // Only the changed part, in texture coordinates, unless the view moved.
+    SDL_Rect update = textureRect;
+    if (!gDirtyAll && sameSource && gPresentedRevision != 0) {
+        int left = std::max(gDirtyLeft - source.x * 2, 0), top = std::max(gDirtyTop - source.y * 2, 0);
+        int right = std::min(gDirtyRight - source.x * 2, w), bottom = std::min(gDirtyBottom - source.y * 2, h);
+        update = { left, top, std::max(right - left, 0), std::max(bottom - top, 0) };
     }
-    SDL_UnlockTexture(gTexture);
+    if (update.w > 0 && update.h > 0) {
+        void* data;
+        int pitch;
+        if (SDL_LockTexture(gTexture, &update, &data, &pitch) != 0) return false;
+        auto convert = [&](int y0, int y1) {
+            for (int y = y0; y < y1; y++) {
+                uint32_t* row = reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(data) + y * pitch);
+                size_t src = (static_cast<size_t>(source.y) * 2 + update.y + y) * gWidth * 2 + source.x * 2 + update.x;
+                for (int x = 0; x < update.w; x++)
+                    row[x] = screenTransformWorldColor(livePixel(src + x));
+            }
+        };
+        // CE: A full 2x view is millions of pixels; split it across cores
+        // (livePixel and the colour transform only read shared state).
+        int threads = static_cast<int>(std::clamp(std::thread::hardware_concurrency(), 1u, 4u));
+        if (static_cast<size_t>(update.w) * update.h < 256 * 1024) threads = 1;
+        std::vector<std::thread> workers;
+        for (int i = 1; i < threads; i++)
+            workers.emplace_back(convert, update.h * i / threads, update.h * (i + 1) / threads);
+        convert(0, update.h / threads);
+        for (auto& worker : workers)
+            worker.join();
+        SDL_UnlockTexture(gTexture);
+    }
+    gDirtyAll = false;
+    gDirtyLeft = gDirtyTop = gDirtyRight = gDirtyBottom = 0;
     gPresentedRevision = gRevision;
     gPresentedSource = source;
     SDL_RenderCopyF(renderer, gTexture, &textureRect, &dest);

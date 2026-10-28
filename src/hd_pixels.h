@@ -9,10 +9,10 @@ inline uint32_t hdLight(uint32_t c, int intensity)
 {
     intensity = std::clamp(intensity, 0, 65536);
     if (intensity == 65536) return c;
-    uint32_t out = c & 0xFF000000;
-    for (int shift : { 0, 8, 16 })
-        out |= (((c >> shift) & 255) * intensity / 65536) << shift;
-    return out;
+    // Red and blue in one 64-bit multiply; exact per-channel c * i / 65536.
+    uint64_t rb = ((static_cast<uint64_t>(c & 0xFF00FF) * intensity) >> 16) & 0xFF00FF;
+    uint32_t g = (((c >> 8) & 255) * static_cast<uint32_t>(intensity)) >> 16;
+    return (c & 0xFF000000) | static_cast<uint32_t>(rb) | (g << 8);
 }
 inline bool hdIsCycling(unsigned char index) { return index >= 229 && index <= 254; }
 inline unsigned char hdLightIndex(unsigned char index, int intensity, const unsigned char* table)
