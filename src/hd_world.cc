@@ -38,9 +38,11 @@ namespace {
     std::vector<unsigned char> gCycleIndex;
     std::vector<uint16_t> gCycleWeight;
     std::unordered_map<size_t, std::array<uint16_t, 26>> gCycleMix;
+    constexpr unsigned char kMixedCycleIndex = 255;
     uint32_t gCycleColors[256] = { };
     std::unordered_set<std::string> gCountedDraws;
     std::vector<uint32_t> gPixels;
+    std::vector<uint32_t> gPresentPixels;
     std::unique_ptr<HdFrameCache> gCache;
     SDL_Texture* gTexture = nullptr;
     uint64_t gRevision = 1;
@@ -52,6 +54,13 @@ namespace {
     SDL_Rect gPresentedSource = { };
     uint64_t gHdCount = 0;
     uint64_t gFallbackCount = 0;
+    double gLastConvertMs = 0.0;
+    double gLastUploadMs = 0.0;
+
+    double elapsedMs(Uint64 from, Uint64 to)
+    {
+        return (to - from) * 1000.0 / SDL_GetPerformanceFrequency();
+    }
 
     void touch(int left, int top, int right, int bottom)
     {
@@ -83,17 +92,20 @@ namespace {
             if (!gCycleMix.empty()) gCycleMix.erase(offset);
             return;
         }
-        if (cycle == 0 && gCycleIndex[offset] == 0 && gCycleMix.empty()) {
+        if (cycle == 0 && gCycleIndex[offset] == 0) {
             gPixels[offset] = hdOver(color, gPixels[offset], opacity);
             return;
         }
         int retain = 255 - alpha + alpha * destinationWeight / 255;
-        auto multi = gCycleMix.find(offset);
+        auto multi = gCycleIndex[offset] == kMixedCycleIndex ? gCycleMix.find(offset) : gCycleMix.end();
         if (multi != gCycleMix.end()) {
             for (auto& weight : multi->second)
                 weight = static_cast<uint32_t>(weight) * retain / 255;
             if (cycle) multi->second[cycle - 229] = std::min<int>(65535, multi->second[cycle - 229] + alpha * 257);
-            if (retain == 0 && !cycle) gCycleMix.erase(multi);
+            if (retain == 0 && !cycle) {
+                gCycleMix.erase(multi);
+                gCycleIndex[offset] = 0;
+            }
         } else {
             int old = gCycleIndex[offset];
             int weight = static_cast<uint32_t>(gCycleWeight[offset]) * retain / 255;
@@ -102,7 +114,7 @@ namespace {
                 mix[old - 229] = weight;
                 mix[cycle - 229] = alpha * 257;
                 gCycleMix.emplace(offset, mix);
-                gCycleIndex[offset] = 0;
+                gCycleIndex[offset] = kMixedCycleIndex;
                 gCycleWeight[offset] = 0;
             } else {
                 if (cycle) {
@@ -119,9 +131,11 @@ namespace {
     uint32_t livePixel(size_t offset)
     {
         uint32_t color = gPixels[offset];
-        if (gCycleIndex[offset] == 0 && gCycleMix.empty() && !gGrayscale) return color;
-        auto multi = gCycleMix.find(offset);
         int index = gCycleIndex[offset];
+        if (index == 0 && !gGrayscale) return color;
+        // The sentinel marks sparse multi-source pixels; never hash-probe
+        // millions of ordinary pixels just because one overlap exists.
+        auto multi = index == kMixedCycleIndex ? gCycleMix.find(offset) : gCycleMix.end();
         int channels[] = { int((color >> 16) & 255), int((color >> 8) & 255), int(color & 255) };
         auto apply = [&](int cycle, int weight) {
             uint32_t base = paletteColor(cycle);
@@ -134,7 +148,7 @@ namespace {
         if (multi != gCycleMix.end()) {
             for (int i = 0; i < 26; i++)
                 if (multi->second[i]) apply(i + 229, multi->second[i]);
-        } else if (index)
+        } else if (index && index != kMixedCycleIndex)
             apply(index, gCycleWeight[offset]);
         color = 0xFF000000;
         for (int c = 0; c < 3; c++)
@@ -283,6 +297,8 @@ void hdWorldInit(int width, int height)
 void hdWorldExit()
 {
     hdWorldResetRenderer();
+    gPresentPixels.clear();
+    gPresentPixels.shrink_to_fit();
     gPixels.clear();
     gPixels.shrink_to_fit();
     gCycleIndex.clear();
@@ -583,7 +599,10 @@ bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FR
             debugPrint("HD view exceeds renderer texture limits; using indexed view\n");
             return false;
         }
-        gTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
+        // GLES2's UnlockTexture uploads the entire allocation even after a
+        // subrect lock. A static texture lets UpdateTexture upload only the
+        // converted dirty rectangle, without the streaming buffer copy.
+        gTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h);
         if (!gTexture) return false;
         SDL_SetTextureBlendMode(gTexture, SDL_BLENDMODE_NONE);
         SDL_SetTextureScaleMode(gTexture, SDL_ScaleModeNearest);
@@ -604,12 +623,15 @@ bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FR
         update = { left, top, std::max(right - left, 0), std::max(bottom - top, 0) };
     }
     if (update.w > 0 && update.h > 0) {
-        void* data;
-        int pitch;
-        if (SDL_LockTexture(gTexture, &update, &data, &pitch) != 0) return false;
+        Uint64 started = SDL_GetPerformanceCounter();
+        // Keep the full-screen allocation through smaller dirty updates so
+        // the next scroll never has to zero-initialize megabytes again.
+        size_t updatePixels = static_cast<size_t>(update.w) * update.h;
+        if (gPresentPixels.size() < updatePixels) gPresentPixels.resize(updatePixels);
+        Uint64 allocated = SDL_GetPerformanceCounter();
         auto convert = [&](int y0, int y1) {
             for (int y = y0; y < y1; y++) {
-                uint32_t* row = reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(data) + y * pitch);
+                uint32_t* row = gPresentPixels.data() + static_cast<size_t>(y) * update.w;
                 size_t src = (static_cast<size_t>(source.y) * 2 + update.y + y) * gWidth * 2 + source.x * 2 + update.x;
                 for (int x = 0; x < update.w; x++)
                     row[x] = screenTransformWorldColor(livePixel(src + x));
@@ -617,22 +639,35 @@ bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FR
         };
         // CE: A full 2x view is millions of pixels; split it across cores
         // (livePixel and the colour transform only read shared state).
-        int threads = static_cast<int>(std::clamp(std::thread::hardware_concurrency(), 1u, 4u));
+        int threads = static_cast<int>(std::clamp(std::thread::hardware_concurrency(), 1u, 8u));
         if (static_cast<size_t>(update.w) * update.h < 256 * 1024) threads = 1;
         std::vector<std::thread> workers;
+        workers.reserve(threads - 1);
         for (int i = 1; i < threads; i++)
             workers.emplace_back(convert, update.h * i / threads, update.h * (i + 1) / threads);
         convert(0, update.h / threads);
         for (auto& worker : workers)
             worker.join();
-        SDL_UnlockTexture(gTexture);
+        Uint64 converted = SDL_GetPerformanceCounter();
+        if (SDL_UpdateTexture(gTexture, &update, gPresentPixels.data(), update.w * sizeof(uint32_t)) != 0) return false;
+        Uint64 uploaded = SDL_GetPerformanceCounter();
+        gLastConvertMs = elapsedMs(allocated, converted);
+        gLastUploadMs = elapsedMs(started, allocated) + elapsedMs(converted, uploaded);
     }
     gDirtyAll = false;
     gDirtyLeft = gDirtyTop = gDirtyRight = gDirtyBottom = 0;
     gPresentedRevision = gRevision;
     gPresentedSource = source;
+    Uint64 copyStart = SDL_GetPerformanceCounter();
     SDL_RenderCopyF(renderer, gTexture, &textureRect, &dest);
+    gLastUploadMs += elapsedMs(copyStart, SDL_GetPerformanceCounter());
     return true;
+}
+
+void hdWorldLastPresentTiming(double* convertMs, double* uploadMs)
+{
+    *convertMs = gLastConvertMs;
+    *uploadMs = gLastUploadMs;
 }
 
 void hdWorldResetRenderer()

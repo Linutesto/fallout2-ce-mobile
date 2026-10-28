@@ -35,6 +35,8 @@ void hdWorldOutline(const FrmId& id, Art* art, int frame, int rotation,
 // Preserve text/stencils that are still drawn by the indexed renderer.
 void hdWorldCopyIndexedChanges(const Rect& rect, const unsigned char* before);
 bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FRect& dest);
+// CPU times for the most recent non-cached HD present (milliseconds).
+void hdWorldLastPresentTiming(double* convertMs, double* uploadMs);
 void hdWorldResetRenderer();
 const uint32_t* hdWorldPixels();
 uint32_t hdWorldColorAt(int x2, int y2);

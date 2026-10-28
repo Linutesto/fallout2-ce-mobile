@@ -395,6 +395,8 @@ static bool gScreenPaletteChanged[256];
 static double gShadowLift = 1.0;
 static GraphicsColorTransform gWorldColorTransform;
 static unsigned char gWorldDisplayChannels[3][256];
+static unsigned char gWorldFastChannels[3][256];
+static bool gWorldFastChannelsReady = false;
 static unsigned char gShadowLiftTable[256];
 
 static Uint32 screenLiftShadows(Uint32 color)
@@ -436,6 +438,20 @@ static void screenUpdatePalette(int first, int count)
                 gWorldDisplayChannels[c][v] = std::clamp<int>(std::lround(gamma * fade), 0, 255);
             }
         gWorldColorTransform.setPreset(gColorPreset);
+        // Original and night_readable grade each RGB channel independently.
+        // Fold gamma, grade and shadow lift once per palette update instead
+        // of recomputing them for millions of HD pixels every present.
+        gWorldFastChannelsReady = gColorPreset == 0 || gColorPreset == 4;
+        if (gWorldFastChannelsReady) {
+            for (int c = 0; c < 3; c++)
+                for (int v = 0; v < 256; v++) {
+                    int gamma = gWorldDisplayChannels[c][v];
+                    Uint32 color = 0xFF000000 | (gamma * 0x010101);
+                    if (gColorPreset != 0) color = gWorldColorTransform.apply(color);
+                    color = screenLiftShadows(color);
+                    gWorldFastChannels[c][v] = (color >> (16 - c * 8)) & 255;
+                }
+        }
     }
     worldViewInvalidatePalette(first, count);
 }
@@ -443,6 +459,9 @@ static void screenUpdatePalette(int first, int count)
 Uint32 screenTransformWorldColor(Uint32 color, int preset)
 {
     int r = (color >> 16) & 255, g = (color >> 8) & 255, b = color & 255;
+    if (preset < 0 && gWorldFastChannelsReady)
+        return 0xFF000000 | (gWorldFastChannels[0][r] << 16)
+            | (gWorldFastChannels[1][g] << 8) | gWorldFastChannels[2][b];
     if (preset >= 0) return screenLiftShadows(graphicsGradeColor(0xFF000000
             | (gWorldDisplayChannels[0][r] << 16) | (gWorldDisplayChannels[1][g] << 8) | gWorldDisplayChannels[2][b],
         preset));
