@@ -1,22 +1,26 @@
 package com.alexbatalov.fallout2ce;
 
-import com.sun.net.httpserver.HttpServer;
 
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.Assume;
 import org.junit.rules.TemporaryFolder;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.net.InetSocketAddress;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -101,28 +105,38 @@ public class HdPacksTest {
         byte[] payload = zip("hd/art/tiles/a.png");
         File game = tmp.newFolder("resume");
         AtomicReference<String> range = new AtomicReference<>();
-        HttpServer server;
+        // A one-request HTTP server on a plain socket: Android unit tests
+        // compile against android.jar, which has no com.sun.net.httpserver.
+        ServerSocket server;
         try {
-            server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+            server = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"));
         } catch (IOException blocked) {
             // Some CI sandboxes disallow even loopback sockets.
             Assume.assumeNoException("loopback sockets unavailable", blocked);
             return;
         }
-        server.createContext("/pack", ex -> {
-            String requested = ex.getRequestHeaders().getFirst("Range");
-            range.set(requested);
-            int offset = requested == null ? 0 : Integer.parseInt(requested.replace("bytes=", "").replace("-", ""));
-            if (offset != 0) ex.getResponseHeaders().set("Content-Range",
-                "bytes " + offset + "-" + (payload.length - 1) + "/" + payload.length);
-            ex.sendResponseHeaders(offset != 0 ? 206 : 200, payload.length - offset);
-            try (OutputStream out = ex.getResponseBody()) {
+        Thread responder = new Thread(() -> {
+            try (Socket socket = server.accept()) {
+                BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.ISO_8859_1));
+                String line;
+                while ((line = in.readLine()) != null && !line.isEmpty())
+                    if (line.toLowerCase(Locale.ROOT).startsWith("range:")) range.set(line.substring(6).trim());
+                String requested = range.get();
+                int offset = requested == null ? 0 : Integer.parseInt(requested.replace("bytes=", "").replace("-", ""));
+                StringBuilder head = new StringBuilder(offset != 0 ? "HTTP/1.1 206 Partial Content\r\n" : "HTTP/1.1 200 OK\r\n");
+                if (offset != 0) head.append("Content-Range: bytes ").append(offset).append('-').append(payload.length - 1).append('/').append(payload.length).append("\r\n");
+                head.append("Content-Length: ").append(payload.length - offset).append("\r\nConnection: close\r\n\r\n");
+                OutputStream out = socket.getOutputStream();
+                out.write(head.toString().getBytes(StandardCharsets.ISO_8859_1));
                 out.write(payload, offset, payload.length - offset);
+                out.flush();
+            } catch (IOException ignored) {
+                // The assertions below report what went wrong.
             }
         });
-        server.start();
+        responder.start();
         try {
-            HdPacks.Pack pack = pack(payload, "http://127.0.0.1:" + server.getAddress().getPort() + "/pack");
+            HdPacks.Pack pack = pack(payload, "http://127.0.0.1:" + server.getLocalPort() + "/pack");
             File partial = new File(game, ".hd-" + pack.name + "-" + pack.sha256 + ".part");
             Files.write(partial.toPath(), Arrays.copyOf(payload, payload.length / 2));
             HdPacks.install(game, pack, NOOP);
@@ -130,7 +144,8 @@ public class HdPacksTest {
             assertTrue(new File(game, "data/hd/art/tiles/a.png").isFile());
             assertFalse(partial.exists());
         } finally {
-            server.stop(0);
+            server.close();
+            responder.join(5000);
         }
     }
 
