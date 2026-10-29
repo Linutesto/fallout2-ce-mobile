@@ -37,9 +37,14 @@ void hdWorldOutline(const FrmId& id, Art* art, int frame, int rotation,
 void hdWorldCopyIndexedChanges(const Rect& rect, const unsigned char* before);
 bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FRect& dest);
 bool hdWorldVerifyTextureColors(SDL_Renderer* renderer);
-bool hdWorldVerifyTextureExact(SDL_Renderer* renderer, size_t* changedPixels);
+bool hdWorldVerifyTextureExact(SDL_Renderer* renderer, size_t* changedPixels,
+    size_t* outOfTolerance = nullptr);
+// GPU composition counters: replayed presents, GPU pixels, presents that had
+// to compose on the CPU, cached world textures.
 // CPU times for the most recent non-cached HD present (milliseconds).
 void hdWorldLastPresentTiming(double* convertMs, double* uploadMs);
+// GPU command replay time of the last present (milliseconds).
+void hdWorldLastGpuTiming(double* replayMs);
 void hdWorldLastUpdateStats(bool* full, int* pixels);
 void hdWorldPresentPathStats(bool* grayscale, size_t* cyclingPixels, int* threads);
 void hdWorldResetRenderer();
@@ -50,5 +55,15 @@ void hdWorldGetCounts(uint64_t* hd, uint64_t* fallback);
 // Samples one complete tileWindowRefresh during the HD autotest benchmark.
 void hdWorldBeginDrawTiming();
 void hdWorldEndDrawTiming(double* lookupMs, double* fallbackMs, double* buildMs, double* pixelsMs, uint64_t* calls);
+void hdWorldLastDrawKinds(uint64_t* lightMap, uint64_t* mask, uint64_t* tint, uint64_t* opacity,
+    uint64_t* fallback, uint64_t* outline, uint64_t* indexed);
+void hdWorldSetGpuFastBenchmark(bool enabled);
+// Dev QA: drop the "this image is already on screen" state, so the next
+// present replays its commands for real.
+void hdWorldInvalidateReplay();
+void hdWorldGpuStatsReset();
+void hdWorldEnsureCpuReference();
+void hdWorldGpuStats(uint64_t* replayFrames, uint64_t* replayPixels, uint64_t* replayCommands,
+    uint64_t* cpuFillFrames, uint64_t* missFrames, uint64_t* textures, uint64_t* textureBytes);
 } // namespace fallout
 #endif

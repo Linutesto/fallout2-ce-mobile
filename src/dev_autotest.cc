@@ -3682,6 +3682,7 @@ static void devAutotestHdManifest()
 
 static std::vector<unsigned char> devAutotestHdReadback()
 {
+    static int readback = 0;
     worldViewEnsureRendered();
     int w, h;
     SDL_GetRendererOutputSize(gSdlRenderer, &w, &h);
@@ -3691,11 +3692,11 @@ static std::vector<unsigned char> devAutotestHdReadback()
     if (SDL_SetRenderTarget(gSdlRenderer, target) != 0) exit(EXIT_FAILURE);
     SDL_SetRenderDrawColor(gSdlRenderer, 0, 0, 0, 255);
     SDL_RenderClear(gSdlRenderer);
+    devAutotestLog("HD readback begin %d clip=%d\n", readback, SDL_RenderIsClipEnabled(gSdlRenderer));
     worldViewRender(gSdlRenderer);
     SDL_RenderFlush(gSdlRenderer);
     std::vector<unsigned char> pixels(static_cast<size_t>(w) * h * 4);
     if (SDL_RenderReadPixels(gSdlRenderer, nullptr, SDL_PIXELFORMAT_ABGR8888, pixels.data(), w * 4) != 0) exit(EXIT_FAILURE);
-    static int readback = 0;
     size_t opaqueColors = 0;
     for (size_t i = 0; i < pixels.size(); i += 4)
         if (pixels[i] || pixels[i + 1] || pixels[i + 2]) ++opaqueColors;
@@ -3705,6 +3706,19 @@ static std::vector<unsigned char> devAutotestHdReadback()
     SDL_SetRenderTarget(gSdlRenderer, previous);
     SDL_DestroyTexture(target);
     return pixels;
+}
+
+// Dev QA: where the GPU world composition was used, and what it fell back
+// to. Cumulative since the process started.
+static void devAutotestLogGpuStats(const char* when)
+{
+    uint64_t replayFrames, replayPixels, replayCommands, cpuFill, miss, textures, bytes;
+    hdWorldGpuStats(&replayFrames, &replayPixels, &replayCommands, &cpuFill, &miss, &textures, &bytes);
+    devAutotestLog("HD gpu compose %s replay_frames=%llu gpu_pixels=%llu gpu_commands=%llu cpu_fill_frames=%llu miss_frames=%llu textures=%llu texture_mb=%.1f\n",
+        when, static_cast<unsigned long long>(replayFrames), static_cast<unsigned long long>(replayPixels),
+        static_cast<unsigned long long>(replayCommands), static_cast<unsigned long long>(cpuFill),
+        static_cast<unsigned long long>(miss), static_cast<unsigned long long>(textures),
+        bytes / (1024.0 * 1024.0));
 }
 
 static void devAutotestHdMatrix()
@@ -3789,8 +3803,12 @@ static void devAutotestHdMatrix()
     fprintf(csv, "hd,iterations,median_refresh_upload_submit_ms,p95_refresh_upload_submit_ms,median_cached_submit_ms,median_draw_ms,median_present_ms,median_convert_ms,median_upload_api_ms,median_upload_submit_ms,median_lookup_ms,median_fallback_ms,median_fallback_build_ms,median_pixels_ms,median_draw_calls\n");
     for (bool enabled : { false, true }) {
         settings.graphics.hd_art = enabled;
+        // In gpu mode the timed frames must measure the real GPU path: the
+        // CPU composition is skipped exactly as it is in the game.
+        hdWorldSetGpuFastBenchmark(enabled && settings.graphics.hd_renderer == "gpu");
+        if (enabled) hdWorldGpuStatsReset();
         hdWorldSettingsChanged();
-        std::vector<double> times, cached, draws, presents, converts, uploadApis, uploadSubmits, lookups, fallbacks, builds, pixelTimes, drawCalls;
+        std::vector<double> times, cached, draws, presents, converts, uploadApis, uploadSubmits, lookups, fallbacks, builds, pixelTimes, drawCalls, renders, flushes, replays;
         for (int i = 0; i < 32; i++) {
             if (enabled) hdWorldBeginDrawTiming();
             Uint64 start = SDL_GetPerformanceCounter();
@@ -3799,11 +3817,16 @@ static void devAutotestHdMatrix()
             double lookup = 0, fallback = 0, build = 0, pixels = 0;
             uint64_t calls = 0;
             if (enabled) hdWorldEndDrawTiming(&lookup, &fallback, &build, &pixels, &calls);
+            Uint64 rendered = SDL_GetPerformanceCounter();
             worldViewRender(gSdlRenderer);
+            Uint64 flushed = SDL_GetPerformanceCounter();
             SDL_RenderFlush(gSdlRenderer);
             double ms = (SDL_GetPerformanceCounter() - start) * 1000.0 / SDL_GetPerformanceFrequency();
-            double convert = 0.0, uploadApi = 0.0;
-            if (enabled) hdWorldLastPresentTiming(&convert, &uploadApi);
+            double convert = 0.0, uploadApi = 0.0, replay = 0.0;
+            if (enabled) {
+                hdWorldLastPresentTiming(&convert, &uploadApi);
+                hdWorldLastGpuTiming(&replay);
+            }
             // Where a refresh goes: composing the map vs converting/uploading it.
             double draw = (drawn - start) * 1000.0 / SDL_GetPerformanceFrequency();
             start = SDL_GetPerformanceCounter();
@@ -3823,9 +3846,12 @@ static void devAutotestHdMatrix()
                 builds.push_back(build);
                 pixelTimes.push_back(pixels);
                 drawCalls.push_back(static_cast<double>(calls));
+                renders.push_back((flushed - rendered) * 1000.0 / SDL_GetPerformanceFrequency());
+                flushes.push_back((SDL_GetPerformanceCounter() - flushed) * 1000.0 / SDL_GetPerformanceFrequency());
+                replays.push_back(replay);
             }
         }
-        for (auto* v : { &times, &cached, &draws, &presents, &converts, &uploadApis, &uploadSubmits, &lookups, &fallbacks, &builds, &pixelTimes, &drawCalls })
+        for (auto* v : { &times, &cached, &draws, &presents, &converts, &uploadApis, &uploadSubmits, &lookups, &fallbacks, &builds, &pixelTimes, &drawCalls, &renders, &flushes, &replays })
             std::sort(v->begin(), v->end());
         fprintf(csv, "%d,30,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.0f\n", enabled, times[15], times[28], cached[15], draws[15], presents[15], converts[15], uploadApis[15], uploadSubmits[15], lookups[15], fallbacks[15], builds[15], pixelTimes[15], drawCalls[15]);
         bool grayscale = false;
@@ -3833,8 +3859,60 @@ static void devAutotestHdMatrix()
         int conversionThreads = 0;
         if (enabled) hdWorldPresentPathStats(&grayscale, &cyclingPixels, &conversionThreads);
         devAutotestLog("HD frame time hd=%d median=%.5f p95=%.5f cached=%.5f ms (draw %.5f, present %.5f, convert %.5f, upload_api %.5f, upload_submit %.5f, lookup %.5f, fallback %.5f, build %.5f, pixels %.5f, calls %.0f, color_path=%s, live_path=%s, cycle_pixels=%zu, threads=%d)\n", enabled, times[15], times[28], cached[15], draws[15], presents[15], converts[15], uploadApis[15], uploadSubmits[15], lookups[15], fallbacks[15], builds[15], pixelTimes[15], drawCalls[15], enabled ? screenWorldColorPath() : "indexed", grayscale ? "grayscale" : cyclingPixels ? "direct_plus_cycle" : "direct", cyclingPixels, conversionThreads);
+        if (enabled) {
+            devAutotestLog("HD frame split render=%.5f flush=%.5f replay=%.5f ms (medians)\n",
+                renders[15], flushes[15], replays[15]);
+            uint64_t lightMap, mask, tint, opacity, fallback, outline, indexed;
+            hdWorldLastDrawKinds(&lightMap, &mask, &tint, &opacity, &fallback, &outline, &indexed);
+            devAutotestLog("HD draw kinds lightMap=%llu mask=%llu tint=%llu opacity=%llu fallback=%llu outline=%llu indexed=%llu\n",
+                static_cast<unsigned long long>(lightMap), static_cast<unsigned long long>(mask), static_cast<unsigned long long>(tint),
+                static_cast<unsigned long long>(opacity), static_cast<unsigned long long>(fallback), static_cast<unsigned long long>(outline),
+                static_cast<unsigned long long>(indexed));
+        }
+        if (enabled && settings.graphics.hd_renderer == "gpu") {
+            // The same full refresh with the on-screen image invalidated
+            // every time: what a real repaint of the whole view costs.
+            std::vector<double> changed;
+            std::vector<double> refreshTimes, renderTimes, flushTimes;
+            for (int i = 0; i < 32; i++) {
+                hdWorldInvalidateReplay();
+                Uint64 started = SDL_GetPerformanceCounter();
+                tileWindowRefresh();
+                Uint64 refreshed = SDL_GetPerformanceCounter();
+                worldViewRender(gSdlRenderer);
+                Uint64 rendered = SDL_GetPerformanceCounter();
+                SDL_RenderFlush(gSdlRenderer);
+                if (i >= 2) {
+                    changed.push_back((SDL_GetPerformanceCounter() - started) * 1000.0 / SDL_GetPerformanceFrequency());
+                    refreshTimes.push_back((refreshed - started) * 1000.0 / SDL_GetPerformanceFrequency());
+                    renderTimes.push_back((rendered - refreshed) * 1000.0 / SDL_GetPerformanceFrequency());
+                    flushTimes.push_back((SDL_GetPerformanceCounter() - rendered) * 1000.0 / SDL_GetPerformanceFrequency());
+                }
+            }
+            auto medianOf = [](std::vector<double>& v) {
+                std::sort(v.begin(), v.end());
+                return v[v.size() / 2];
+            };
+            devAutotestLog("HD full refresh split refresh=%.5f render=%.5f flush=%.5f ms (medians)\n",
+                medianOf(refreshTimes), medianOf(renderTimes), medianOf(flushTimes));
+            std::sort(changed.begin(), changed.end());
+            devAutotestLog("HD full refresh with changes: median=%.5f p95=%.5f ms (replay included)\n",
+                changed[15], changed[28]);
+        }
     }
     fclose(csv);
+    if (settings.graphics.hd_renderer == "gpu") {
+        // The benchmark composed only on the GPU. Rebuild the CPU reference
+        // without presenting it, then prove the texture matches it.
+        size_t changed = 0, outside = 0;
+        hdWorldEnsureCpuReference();
+        bool readback = hdWorldVerifyTextureExact(gSdlRenderer, &changed, &outside);
+        devAutotestLog("HD gpu full refresh texture vs CPU: readback=%d differing_pixels=%zu out_of_tolerance=%zu\n",
+            readback, changed, outside);
+        if (!readback || outside != 0) exit(EXIT_FAILURE);
+        devAutotestLogGpuStats("full_refresh");
+    }
+    hdWorldSetGpuFastBenchmark(false);
     settings.graphics.hd_art = true;
     hdWorldSettingsChanged();
 }
@@ -3846,6 +3924,11 @@ static void devAutotestHdGameplay()
     FILE* gameplay = fopen((gDevAutotestOutputPath + "/hd-gameplay.csv").c_str(), "w");
     if (!gameplay) exit(EXIT_FAILURE);
     fprintf(gameplay, "segment,frame,total_ms,draw_ms,present_ms,full_update,updated_pixels\n");
+    // In gpu mode these segments run the way the game runs them: the CPU
+    // composition is skipped and only verified afterwards.
+    const bool gpuFast = settings.graphics.hd_renderer == "gpu";
+    hdWorldSetGpuFastBenchmark(gpuFast);
+    hdWorldGpuStatsReset();
     auto runSegment = [&](const char* name, int frames, auto&& mutate) {
         std::vector<double> values;
         int full = 0, dirty = 0, cachedFrames = 0;
@@ -3876,10 +3959,12 @@ static void devAutotestHdGameplay()
     };
     runSegment("scroll", 40, [&](int i) { worldViewPanBy(i < 20 ? 16.0f : -16.0f, 0.0f); });
 #ifndef __ANDROID__
-    size_t scrollChanged = 0;
-    bool scrollExact = hdWorldVerifyTextureExact(gSdlRenderer, &scrollChanged);
-    devAutotestLog("HD scroll texture vs CPU: readback=%d changed_pixels=%zu\n", scrollExact, scrollChanged);
-    if (!scrollExact || scrollChanged != 0) exit(EXIT_FAILURE);
+    size_t scrollChanged = 0, scrollOutside = 0;
+    hdWorldEnsureCpuReference();
+    bool scrollExact = hdWorldVerifyTextureExact(gSdlRenderer, &scrollChanged, &scrollOutside);
+    devAutotestLog("HD scroll texture vs CPU: readback=%d changed_pixels=%zu out_of_tolerance=%zu\n",
+        scrollExact, scrollChanged, scrollOutside);
+    if (!scrollExact || (gpuFast ? scrollOutside != 0 : scrollChanged != 0)) exit(EXIT_FAILURE);
 #endif
     runSegment("critter_rect", 32, [&](int i) {
         Rect visible;
@@ -3889,6 +3974,16 @@ static void devAutotestHdGameplay()
         Rect rect = { cx - 24, cy - 36, cx + 24, cy + 36 };
         tileWindowRefreshRect(&rect, gElevation);
     });
+#ifndef __ANDROID__
+    size_t rectChanged = 0, rectOutside = 0;
+    hdWorldEnsureCpuReference();
+    bool rectExact = hdWorldVerifyTextureExact(gSdlRenderer, &rectChanged, &rectOutside);
+    devAutotestLog("HD critter texture vs CPU: readback=%d changed_pixels=%zu out_of_tolerance=%zu\n",
+        rectExact, rectChanged, rectOutside);
+    if (!rectExact || (gpuFast ? rectOutside != 0 : rectChanged != 0)) exit(EXIT_FAILURE);
+#endif
+    hdWorldSetGpuFastBenchmark(false);
+    devAutotestLogGpuStats("gameplay");
     fclose(gameplay);
 }
 

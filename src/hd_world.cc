@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cstring>
 #include <filesystem>
+#include <list>
 #include <memory>
 #include <thread>
 #include <unordered_map>
@@ -19,6 +20,8 @@
 #include "graphics.h"
 #include "hd_art.h"
 #include "hd_pixels.h"
+#include <lodepng.h>
+#include "map.h"
 #include "object.h"
 #include "settings.h"
 #include "svga.h"
@@ -67,6 +70,172 @@ namespace {
     bool gMeasureDraw = false;
     Uint64 gLookupTicks = 0, gFallbackTicks = 0, gBuildTicks = 0, gPixelTicks = 0;
     uint64_t gDrawCalls = 0;
+    uint64_t gLightMapCalls = 0, gMaskCalls = 0, gTintCalls = 0, gOpacityCalls = 0;
+    uint64_t gFallbackCalls = 0, gOutlineCalls = 0, gIndexedCalls = 0;
+    struct GpuFrameTexture {
+        SDL_Texture* texture = nullptr;
+        std::shared_ptr<const HdFrame> frame;
+        ~GpuFrameTexture() { if (texture) SDL_DestroyTexture(texture); }
+    };
+    struct GpuCommand {
+        enum Kind { Clear, Draw, Fill } kind;
+        SDL_Rect rect;
+        SDL_Rect source = { };
+        std::shared_ptr<GpuFrameTexture> art;
+        uint32_t color = 0;
+    };
+    std::vector<GpuCommand> gGpuCommands;
+    std::list<std::string> gGpuLru;
+    struct GpuCacheEntry {
+        std::shared_ptr<GpuFrameTexture> art;
+        std::list<std::string>::iterator lru;
+        size_t bytes;
+    };
+    std::unordered_map<std::string, GpuCacheEntry> gGpuFrames;
+    size_t gGpuFrameBytes = 0;
+    uint64_t gGpuColorVersion = 0;
+    bool gGpuCompositionUnsupported = false;
+    bool gGpuTimedFast = false;
+    bool gGpuForceCpu = false;
+    // The refresh being built was recorded for the GPU while the CPU buffer
+    // stayed untouched; present must then supply what the replay cannot.
+    bool gGpuFrameSkippedCpu = false;
+    uint64_t gGpuReplayFrames = 0, gGpuReplayPixels = 0, gGpuReplayCommands = 0;
+    uint64_t gGpuCpuFillFrames = 0, gGpuMissFrames = 0, gGpuUnsupportedFrames = 0;
+    uint64_t gFrameReplayPixels = 0, gFrameReplayCommands = 0;
+    double gLastReplayMs = 0.0;
+    // Bumped whenever the world texture changes outside a command replay, so
+    // an unchanged refresh can be recognised and skipped.
+    uint64_t gTextureEpoch = 0;
+    uint64_t gLastReplayHash = 0;
+    uint64_t gLastReplayEpoch = 0;
+    bool gReplayStateValid = false;
+
+    bool gpuCompositionRequested()
+    {
+        return settings.graphics.hd_renderer == "gpu" && !gGpuScrollFailed && !gGpuForceCpu
+            && gSdlRenderer != nullptr && gGpuScrollAvailable;
+    }
+
+    bool gpuSkipCpu()
+    {
+        bool skip = gpuCompositionRequested() && !gGpuForceCpu
+            && (!devAutotestIsEnabled() || gGpuTimedFast);
+        gGpuFrameSkippedCpu |= skip;
+        return skip;
+    }
+
+    void gpuForgetFrames()
+    {
+        gGpuCommands.clear();
+        gGpuFrames.clear();
+        gGpuLru.clear();
+        gGpuFrameBytes = 0;
+    }
+
+    // Identity of the recorded composition: the same list replays to the
+    // same image, provided the texture itself was not touched in between.
+    uint64_t gpuCommandHash()
+    {
+        uint64_t h = 1469598103934665603ull;
+        auto fold = [&](uint64_t value) { h = (h ^ value) * 1099511628211ull; };
+        for (const GpuCommand& command : gGpuCommands) {
+            fold(command.kind);
+            fold(static_cast<uint64_t>(command.rect.x) | (static_cast<uint64_t>(command.rect.y) << 32));
+            fold(static_cast<uint64_t>(command.rect.w) | (static_cast<uint64_t>(command.rect.h) << 32));
+            fold(static_cast<uint64_t>(command.source.x) | (static_cast<uint64_t>(command.source.y) << 32));
+            fold(command.color);
+            fold(command.art ? static_cast<uint64_t>(reinterpret_cast<uintptr_t>(command.art->texture)) : 0);
+        }
+        return h;
+    }
+
+    std::shared_ptr<GpuFrameTexture> gpuFrame(const std::shared_ptr<const HdFrame>& frame,
+        const unsigned char* original, int originalWidth, int originalHeight,
+        int worldX, int worldY, int left, int top, int right, int bottom,
+        int light, const HdDrawOptions& options, bool isHd)
+    {
+        if (!frame || !gSdlRenderer || options.tint >= 0) return nullptr;
+        int w = frame->width, h = frame->height;
+        uint64_t shape = 1469598103934665603ull;
+        auto fold = [&](uint64_t value) { shape = (shape ^ value) * 1099511628211ull; };
+        if (options.lightMap) {
+            for (int y = 0; y < originalHeight; y++)
+                for (int x = 0; x < originalWidth; x++)
+                    fold(static_cast<uint32_t>(options.lightMap[y * options.lightPitch + x]));
+        }
+        if (options.mask) {
+            fold(static_cast<uint32_t>(left)); fold(static_cast<uint32_t>(top));
+            fold(static_cast<uint32_t>(right)); fold(static_cast<uint32_t>(bottom));
+            for (int y = top / 2; y < bottom / 2; y++)
+                for (int x = left / 2; x < right / 2; x++)
+                    fold(options.mask[(y - options.maskY) * options.maskPitch + x - options.maskX]);
+        }
+        std::string key = std::to_string(reinterpret_cast<uintptr_t>(frame.get())) + ":" + std::to_string(isHd)
+            + ":" + std::to_string(light) + ":" + std::to_string(options.opacity) + ":" + std::to_string(shape)
+            + ":" + std::to_string(gGpuColorVersion);
+        auto found = gGpuFrames.find(key);
+        if (found != gGpuFrames.end()) {
+            gGpuLru.splice(gGpuLru.begin(), gGpuLru, found->second.lru);
+            return found->second.art;
+        }
+        size_t bytes = static_cast<size_t>(w) * h * sizeof(uint32_t) + frame->pixels.size() * sizeof(uint32_t);
+#ifdef __ANDROID__
+        size_t budget = 96ull * 1024 * 1024;
+#else
+        size_t budget = 256ull * 1024 * 1024;
+#endif
+        budget = std::min(budget, static_cast<size_t>(std::clamp(settings.graphics.hd_cache_mb, 0, 4096)) * 1024 * 1024);
+        if (bytes > budget) return nullptr;
+        while (gGpuFrameBytes + bytes > budget && !gGpuLru.empty()) {
+            auto last = std::prev(gGpuLru.end());
+            auto entry = gGpuFrames.find(*last);
+            if (entry->second.art.use_count() > 1) return nullptr;
+            gGpuFrameBytes -= entry->second.bytes;
+            gGpuFrames.erase(entry);
+            gGpuLru.erase(last);
+        }
+        std::vector<uint32_t> pixels(static_cast<size_t>(w) * h);
+        // The CPU loop's plain path takes the scalar light even when a light
+        // map is present; the GPU frame has to follow it exactly.
+        const bool plain = options.tint < 0 && !options.mask && options.opacity == 255;
+        for (int sy = 0; sy < h; sy++)
+            for (int sx = 0; sx < w; sx++) {
+                int dx = worldX * 2 + sx, dy = worldY * 2 + sy;
+                if (options.mask && (dx < left || dx >= right || dy < top || dy >= bottom)) continue;
+                unsigned char index = original[(sy / 2) * originalWidth + sx / 2];
+                uint32_t color = frame->pixels[static_cast<size_t>(sy) * w + sx];
+                if (hdIsCycling(index)) color = gCycleColors[index];
+                int alpha = color >> 24;
+                if (!alpha) continue;
+                if (isHd && !hdIsCycling(index)) {
+                    int intensity = light;
+                    if (options.lightMap && index && !plain)
+                        intensity = hdInterpolateLight(options.lightMap, options.lightPitch,
+                            originalWidth, originalHeight, sx, sy, original);
+                    color = hdLight(color, intensity);
+                }
+                int opacity = options.opacity;
+                if (options.mask) {
+                    int mask = options.mask[(dy / 2 - options.maskY) * options.maskPitch + dx / 2 - options.maskX];
+                    if (mask) opacity = opacity * std::min(mask, 128) / 128;
+                }
+                alpha = (alpha * opacity + 127) / 255;
+                uint32_t graded = screenTransformWorldColor(color);
+                pixels[static_cast<size_t>(sy) * w + sx] = (static_cast<uint32_t>(alpha) << 24) | (graded & 0xFFFFFF);
+            }
+        auto entry = std::make_shared<GpuFrameTexture>();
+        entry->frame = frame;
+        entry->texture = SDL_CreateTexture(gSdlRenderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h);
+        if (!entry->texture || SDL_UpdateTexture(entry->texture, nullptr, pixels.data(), w * sizeof(uint32_t)) != 0)
+            return nullptr;
+        SDL_SetTextureBlendMode(entry->texture, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(entry->texture, SDL_ScaleModeNearest);
+        gGpuLru.push_front(key);
+        gGpuFrames.emplace(key, GpuCacheEntry { entry, gGpuLru.begin(), bytes });
+        gGpuFrameBytes += bytes;
+        return entry;
+    }
 
     double elapsedMs(Uint64 from, Uint64 to)
     {
@@ -267,6 +436,62 @@ namespace {
         }
         return out;
     }
+
+    void resetWorldTexturesOnly()
+    {
+        if (gTexture) SDL_DestroyTexture(gTexture);
+        if (gScrollTexture) SDL_DestroyTexture(gScrollTexture);
+        gTexture = gScrollTexture = nullptr;
+        gGpuScrollAvailable = false;
+        gScrollPending = false;
+        gScrollX = gScrollY = 0;
+        gPresentedRevision = 0;
+        ++gTextureEpoch;
+        gReplayStateValid = false;
+    }
+
+    bool gpuReplayCommands(SDL_Renderer* renderer, const SDL_Rect& source)
+    {
+        gFrameReplayPixels = 0;
+        gFrameReplayCommands = 0;
+        if (!gTexture || gGpuCommands.empty()) return false;
+        // Binding a render target resets SDL's clip state; keep the caller's
+        // clip so the screen blit after the replay still clips.
+        bool hadClip = SDL_RenderIsClipEnabled(renderer);
+        SDL_Rect oldClip = { };
+        if (hadClip) SDL_RenderGetClipRect(renderer, &oldClip);
+        SDL_Texture* previous = SDL_GetRenderTarget(renderer);
+        if (SDL_SetRenderTarget(renderer, gTexture) != 0) return false;
+        SDL_Rect visible = { source.x * 2, source.y * 2, source.w * 2, source.h * 2 };
+        Uint8 oldR, oldG, oldB, oldA;
+        SDL_GetRenderDrawColor(renderer, &oldR, &oldG, &oldB, &oldA);
+        SDL_BlendMode oldBlend;
+        SDL_GetRenderDrawBlendMode(renderer, &oldBlend);
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+        bool ok = true;
+        for (const GpuCommand& command : gGpuCommands) {
+            SDL_Rect overlap;
+            if (!SDL_IntersectRect(&command.rect, &visible, &overlap)) continue;
+            SDL_Rect target = { overlap.x - visible.x, overlap.y - visible.y, overlap.w, overlap.h };
+            if (command.kind == GpuCommand::Draw) {
+                SDL_Rect artSource = { command.source.x + overlap.x - command.rect.x,
+                    command.source.y + overlap.y - command.rect.y, overlap.w, overlap.h };
+                ok = SDL_RenderCopy(renderer, command.art->texture, &artSource, &target) == 0;
+            } else {
+                uint32_t color = command.kind == GpuCommand::Clear ? screenTransformWorldColor(0xFF000000) : command.color;
+                SDL_SetRenderDrawColor(renderer, (color >> 16) & 255, (color >> 8) & 255, color & 255, 255);
+                ok = SDL_RenderFillRect(renderer, &target) == 0;
+            }
+            if (!ok) break;
+            ++gFrameReplayCommands;
+            gFrameReplayPixels += static_cast<uint64_t>(overlap.w) * overlap.h;
+        }
+        SDL_SetRenderDrawColor(renderer, oldR, oldG, oldB, oldA);
+        SDL_SetRenderDrawBlendMode(renderer, oldBlend);
+        SDL_SetRenderTarget(renderer, previous);
+        if (hadClip) SDL_RenderSetClipRect(renderer, &oldClip);
+        return ok;
+    }
 } // namespace
 
 void hdWorldInit(int width, int height)
@@ -337,6 +562,8 @@ void hdWorldGetCounts(uint64_t* hd, uint64_t* fallback)
 void hdWorldBeginDrawTiming()
 {
     gLookupTicks = gFallbackTicks = gBuildTicks = gPixelTicks = gDrawCalls = 0;
+    gLightMapCalls = gMaskCalls = gTintCalls = gOpacityCalls = 0;
+    gFallbackCalls = gOutlineCalls = gIndexedCalls = 0;
     gMeasureDraw = true;
 }
 void hdWorldEndDrawTiming(double* lookupMs, double* fallbackMs, double* buildMs, double* pixelsMs, uint64_t* calls)
@@ -347,6 +574,52 @@ void hdWorldEndDrawTiming(double* lookupMs, double* fallbackMs, double* buildMs,
     *buildMs = elapsedMs(0, gBuildTicks);
     *pixelsMs = elapsedMs(0, gPixelTicks);
     *calls = gDrawCalls;
+}
+
+void hdWorldLastDrawKinds(uint64_t* lightMap, uint64_t* mask, uint64_t* tint, uint64_t* opacity,
+    uint64_t* fallback, uint64_t* outline, uint64_t* indexed)
+{
+    *lightMap = gLightMapCalls;
+    *mask = gMaskCalls;
+    *tint = gTintCalls;
+    *opacity = gOpacityCalls;
+    *fallback = gFallbackCalls;
+    *outline = gOutlineCalls;
+    *indexed = gIndexedCalls;
+}
+
+void hdWorldSetGpuFastBenchmark(bool enabled) { gGpuTimedFast = enabled; }
+
+void hdWorldInvalidateReplay() { gReplayStateValid = false; }
+
+void hdWorldGpuStatsReset()
+{
+    gGpuReplayFrames = gGpuReplayPixels = gGpuReplayCommands = 0;
+    gGpuCpuFillFrames = gGpuMissFrames = gGpuUnsupportedFrames = 0;
+}
+
+void hdWorldEnsureCpuReference()
+{
+    if (!gpuSkipCpu()) return;
+    gGpuForceCpu = true;
+    tileWindowRefresh();
+    gGpuForceCpu = false;
+    gGpuCommands.clear();
+    gGpuCompositionUnsupported = false;
+    gGpuFrameSkippedCpu = false;
+    gDirtyAll = true;
+}
+
+void hdWorldGpuStats(uint64_t* replayFrames, uint64_t* replayPixels, uint64_t* replayCommands,
+    uint64_t* cpuFillFrames, uint64_t* missFrames, uint64_t* textures, uint64_t* textureBytes)
+{
+    *replayFrames = gGpuReplayFrames;
+    *replayPixels = gGpuReplayPixels;
+    *replayCommands = gGpuReplayCommands;
+    *cpuFillFrames = gGpuCpuFillFrames;
+    *missFrames = gGpuMissFrames + gGpuUnsupportedFrames;
+    *textures = gGpuFrames.size();
+    *textureBytes = gGpuFrameBytes;
 }
 
 void hdWorldSetFilter(int filter)
@@ -381,7 +654,14 @@ void hdWorldClear(const Rect& rect)
     gGrayscale = false;
     gCountedDraws.clear();
     int left = std::max(rect.left, 0) * 2, right = std::min(rect.right + 1, gWidth) * 2;
+    if (gpuCompositionRequested() && left < right) {
+        if (gGpuCommands.empty()) gGpuCompositionUnsupported = false;
+        SDL_Rect clear = { left, std::max(rect.top, 0) * 2, right - left,
+            (std::min(rect.bottom + 1, gHeight) - std::max(rect.top, 0)) * 2 };
+        gGpuCommands.push_back({ GpuCommand::Clear, clear });
+    }
     touch(left, std::max(rect.top, 0) * 2, right, std::min(rect.bottom + 1, gHeight) * 2);
+    if (gpuSkipCpu()) return;
     for (int y = std::max(rect.top, 0) * 2; y < std::min(rect.bottom + 1, gHeight) * 2; y++) {
         size_t offset = static_cast<size_t>(y) * gWidth * 2;
         std::fill(gPixels.begin() + offset + left, gPixels.begin() + offset + right, 0xFF000000);
@@ -420,6 +700,7 @@ void hdWorldScrolled(int dx, int dy)
     int left = std::max(-dx, 0), right = std::min(w - dx, w);
     int top = std::max(-dy, 0), bottom = std::min(h - dy, h);
     if (left >= right || top >= bottom) return;
+    if (gpuSkipCpu()) return;
     int y = dy >= 0 ? top : bottom - 1, end = dy >= 0 ? bottom : top - 1, step = dy >= 0 ? 1 : -1;
     for (; y != end; y += step) {
         size_t dst = static_cast<size_t>(y) * w + left, src = static_cast<size_t>(y + dy) * w + left + dx;
@@ -441,6 +722,9 @@ void hdWorldPaletteChanged(int first, int count)
     ++gRevision;
     gDirtyAll = true;
     gScrollPending = false;
+    ++gGpuColorVersion;
+    gpuForgetFrames();
+    gGpuCompositionUnsupported = true;
     // CE: Partial updates are the cycle's unfaded palette. Full palette
     // changes are gamma/fades, applied once by the display transform.
     if (first > 0)
@@ -454,6 +738,8 @@ void hdWorldGrayscale()
         ++gRevision;
         gDirtyAll = true;
         gScrollPending = false;
+        // Grayscale is applied by the CPU present path only.
+        gGpuCompositionUnsupported = true;
     }
 }
 
@@ -471,6 +757,11 @@ void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
     Uint64 phase = gMeasureDraw ? SDL_GetPerformanceCounter() : 0;
     auto hd = frameFor(id, frame, rotation, w, h);
     if (gMeasureDraw) {
+        gLightMapCalls += options.lightMap != nullptr;
+        gMaskCalls += options.mask != nullptr;
+        gTintCalls += options.tint >= 0;
+        gOpacityCalls += options.opacity != 255;
+        gFallbackCalls += !hd;
         gLookupTicks += SDL_GetPerformanceCounter() - phase;
         phase = SDL_GetPerformanceCounter();
         ++gDrawCalls;
@@ -519,6 +810,18 @@ void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
         gFallbackTicks += SDL_GetPerformanceCounter() - phase;
         phase = SDL_GetPerformanceCounter();
     }
+    if (gpuCompositionRequested() && !gGpuCompositionUnsupported) {
+        auto gpu = gpuFrame(hd ? hd : fallback, original, w, h, x, y,
+            left, top, right, bottom, light, options, hd != nullptr);
+        if (gpu) {
+            SDL_Rect rect = { left, top, right - left, bottom - top };
+            SDL_Rect source = { left - x * 2, top - y * 2, rect.w, rect.h };
+            gGpuCommands.push_back({ GpuCommand::Draw, rect, source, gpu });
+        } else {
+            gGpuCompositionUnsupported = true;
+        }
+    }
+    if (gpuSkipCpu()) return;
     // CE: Most pixels of a refresh are opaque, unmasked and uncycled; they
     // take a direct store. Everything else goes through writePixel below.
     const bool plain = options.tint < 0 && !options.mask && options.opacity == 255;
@@ -602,9 +905,14 @@ void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
 void hdWorldOutline(const FrmId& id, Art* art, int frame, int rotation,
     int x, int y, const Rect& clip, int color, int bandHeight, int bandCount, int tint)
 {
+    if (gMeasureDraw) ++gOutlineCalls;
     if (!hdWorldActive() || gPixels.empty()) return;
     ++gRevision;
     int w = artGetWidth(art, frame, static_cast<Rotation>(rotation)), h = artGetHeight(art, frame, static_cast<Rotation>(rotation));
+    if (gpuCompositionRequested()) gGpuCompositionUnsupported = true;
+    touch(std::max({ x - 1, clip.left, 0 }) * 2, std::max({ y - 1, clip.top, 0 }) * 2,
+        std::min({ x + w + 1, clip.right + 1, gWidth }) * 2, std::min({ y + h + 1, clip.bottom + 1, gHeight }) * 2);
+    if (gpuSkipCpu()) return;
     auto hd = frameFor(id, frame, rotation, w, h);
     auto original = artGetFrameData(art, frame, static_cast<Rotation>(rotation));
     auto opaque = [&](int sx, int sy) {
@@ -613,8 +921,6 @@ void hdWorldOutline(const FrmId& id, Art* art, int frame, int rotation,
     };
     int coverWidth = 0, coverHeight = 0, coverPitch = 0;
     const auto* cover = objectSeeThroughCover(&coverWidth, &coverHeight, &coverPitch);
-    touch(std::max({ x - 1, clip.left, 0 }) * 2, std::max({ y - 1, clip.top, 0 }) * 2,
-        std::min({ x + w + 1, clip.right + 1, gWidth }) * 2, std::min({ y + h + 1, clip.bottom + 1, gHeight }) * 2);
     for (int dy = std::max({ y - 1, clip.top, 0 }) * 2; dy < std::min({ y + h + 1, clip.bottom + 1, gHeight }) * 2; dy++)
         for (int dx = std::max({ x - 1, clip.left, 0 }) * 2; dx < std::min({ x + w + 1, clip.right + 1, gWidth }) * 2; dx++) {
             int sx = dx - x * 2, sy = dy - y * 2;
@@ -651,6 +957,7 @@ void hdWorldOutline(const FrmId& id, Art* art, int frame, int rotation,
 
 void hdWorldCopyIndexedChanges(const Rect& rect, const unsigned char* before)
 {
+    if (gMeasureDraw) ++gIndexedCalls;
     if (!hdWorldActive() || gPixels.empty()) return;
     ++gRevision;
     int width = rect.right - rect.left + 1;
@@ -660,6 +967,12 @@ void hdWorldCopyIndexedChanges(const Rect& rect, const unsigned char* before)
         for (int x = rect.left; x <= rect.right; x++) {
             int index = buffer[y * gWidth + x];
             if (index == before[(y - rect.top) * width + x - rect.left]) continue;
+            if (gpuCompositionRequested() && !gGpuCompositionUnsupported) {
+                SDL_Rect pixel = { x * 2, y * 2, 2, 2 };
+                uint32_t color = screenTransformWorldColor(hdIsCycling(index) ? gCycleColors[index] : paletteColor(index));
+                gGpuCommands.push_back({ GpuCommand::Fill, pixel, { }, nullptr, color });
+            }
+            if (gpuSkipCpu()) continue;
             for (int sy = 0; sy < 2; sy++)
                 for (int sx = 0; sx < 2; sx++)
                     writePixel((static_cast<size_t>(y) * 2 + sy) * gWidth * 2 + x * 2 + sx, paletteColor(index), 255, hdIsCycling(index) ? index : 0);
@@ -675,7 +988,7 @@ bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FR
     if (gTexture) SDL_QueryTexture(gTexture, nullptr, nullptr, &tw, &th);
     bool wantGpu = settings.graphics.hd_renderer == "gpu" && !gGpuScrollFailed;
     if (!gTexture || tw != w || th != h || gTextureGpuMode != wantGpu) {
-        hdWorldResetRenderer();
+        resetWorldTexturesOnly();
         SDL_RendererInfo info = { };
         if (SDL_GetRendererInfo(renderer, &info) == 0 && ((info.max_texture_width > 0 && w > info.max_texture_width) || (info.max_texture_height > 0 && h > info.max_texture_height))) {
             debugPrint("HD view exceeds renderer texture limits; using indexed view\n");
@@ -719,10 +1032,13 @@ bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FR
     int shiftX = gScrollX + (source.x - gPresentedSource.x) * 2;
     int shiftY = gScrollY + (source.y - gPresentedSource.y) * 2;
     bool reusedTexture = false;
+    bool shiftCopied = false;
     if (gGpuScrollAvailable && !gDirtyAll && gPresentedRevision != 0
         && std::abs(shiftX) < w && std::abs(shiftY) < h) {
         reusedTexture = true;
         if (shiftX != 0 || shiftY != 0) {
+            shiftCopied = true;
+            ++gTextureEpoch;
             SDL_Texture* oldTarget = SDL_GetRenderTarget(renderer);
             SDL_Rect oldClip;
             bool hadClip = SDL_RenderIsClipEnabled(renderer);
@@ -738,7 +1054,177 @@ bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FR
             if (reusedTexture) std::swap(gTexture, gScrollTexture);
         }
     }
+    const bool shifted = reusedTexture;
+    gGpuFrameSkippedCpu = false;
+    // In this mode the CPU buffer is never a mirror of the screen: present
+    // must supply every region the GPU replay does not cover itself.
+    const bool skipMode = gpuCompositionRequested() && (!devAutotestIsEnabled() || gGpuTimedFast);
+    double gpuComposeMs = 0.0;
+    bool gpuFull = false;
+    gLastReplayMs = 0.0;
+    gFrameReplayPixels = 0;
+    gFrameReplayCommands = 0;
+    SDL_Rect visible = { source.x * 2, source.y * 2, w, h };
+    auto contains = [](const SDL_Rect& outer, const SDL_Rect& inner) {
+        return inner.x >= outer.x && inner.y >= outer.y
+            && inner.x + inner.w <= outer.x + outer.w
+            && inner.y + inner.h <= outer.y + outer.h;
+    };
+    auto fullClearCovers = [&]() {
+        for (const GpuCommand& command : gGpuCommands)
+            if (command.kind == GpuCommand::Clear && contains(command.rect, visible)) return true;
+        return false;
+    };
+    // gDirtyAll asks for a whole-view repaint: the recorded commands qualify
+    // only when one clear covers the view, otherwise they are partial.
+    auto canReplay = [&]() {
+        return gGpuScrollAvailable && !gGpuCompositionUnsupported && !gGpuCommands.empty()
+            && (!gDirtyAll || fullClearCovers());
+    };
+    auto coveredByCommands = [&](const SDL_Rect& rect) {
+        SDL_Rect area = { rect.x + visible.x, rect.y + visible.y, rect.w, rect.h };
+        for (const GpuCommand& command : gGpuCommands) {
+            SDL_Rect part;
+            if (SDL_IntersectRect(&command.rect, &visible, &part) && contains(part, area)) return true;
+        }
+        return false;
+    };
+
+    // Regions the replay cannot supply: strips a viewport shift exposed, or
+    // everything the frame touched when nothing replays at all.
+    std::vector<SDL_Rect> fill;
+    std::vector<SDL_Rect> cpuFill;
+    if (skipMode) {
+        if (canReplay()) {
+            if (shifted) {
+                SDL_Rect strips[4] = { { w - shiftX, 0, shiftX, h }, { 0, 0, -shiftX, h },
+                    { 0, h - shiftY, w, shiftY }, { 0, 0, w, -shiftY } };
+                for (SDL_Rect strip : strips)
+                    if (strip.w > 0 && strip.h > 0 && !coveredByCommands(strip)) fill.push_back(strip);
+            }
+        } else if (gDirtyAll || gPresentedRevision == 0
+            || (!shifted && (shiftX != 0 || shiftY != 0 || !sameSource))) {
+            fill.push_back(textureRect);
+        } else {
+            if (shifted) {
+                SDL_Rect strips[4] = { { w - shiftX, 0, shiftX, h }, { 0, 0, -shiftX, h },
+                    { 0, h - shiftY, w, shiftY }, { 0, 0, w, -shiftY } };
+                for (SDL_Rect strip : strips)
+                    if (strip.w > 0 && strip.h > 0) fill.push_back(strip);
+            }
+            int left = std::max(gDirtyLeft - visible.x, 0), top = std::max(gDirtyTop - visible.y, 0);
+            int right = std::min(gDirtyRight - visible.x, w), bottom = std::min(gDirtyBottom - visible.y, h);
+            SDL_Rect dirty = { left, top, std::max(right - left, 0), std::max(bottom - top, 0) };
+            if (dirty.w > 0 && dirty.h > 0) {
+                bool inside = false;
+                for (const SDL_Rect& rect : fill)
+                    if (contains(rect, dirty)) inside = true;
+                if (!inside) fill.push_back(dirty);
+            }
+        }
+        auto composeRects = [&](const std::vector<SDL_Rect>& rects, bool onCpu) {
+            gGpuForceCpu = onCpu;
+            for (const SDL_Rect& rect : rects) {
+                Rect area = { (rect.x + visible.x) / 2, (rect.y + visible.y) / 2,
+                    (rect.x + visible.x + rect.w) / 2 - 1, (rect.y + visible.y + rect.h) / 2 - 1 };
+                tileWindowRefreshRect(&area, gElevation);
+            }
+            gGpuForceCpu = false;
+        };
+        auto dirtyRect = [&]() {
+            int left = std::max(gDirtyLeft - visible.x, 0), top = std::max(gDirtyTop - visible.y, 0);
+            int right = std::min(gDirtyRight - visible.x, w), bottom = std::min(gDirtyBottom - visible.y, h);
+            return SDL_Rect { left, top, std::max(right - left, 0), std::max(bottom - top, 0) };
+        };
+        if (!fill.empty()) {
+            if (gGpuScrollAvailable && !gGpuCompositionUnsupported) {
+                // Compose the missing regions through the GPU path itself:
+                // the frame textures are usually cached already.
+                composeRects(fill, false);
+            } else {
+                // An operation the GPU cannot replay: compose on the CPU.
+                composeRects(fill, true);
+                cpuFill = fill;
+                ++gGpuCpuFillFrames;
+            }
+        }
+        if (gGpuCompositionUnsupported && cpuFill.empty()) {
+            // Recording the missing region hit an operation the GPU cannot
+            // replay, so nothing will replay at all: compose everything this
+            // frame touched on the CPU instead.
+            std::vector<SDL_Rect> rects;
+            if (gDirtyAll || gPresentedRevision == 0) {
+                rects.push_back(textureRect);
+            } else {
+                if (shifted) {
+                    SDL_Rect strips[4] = { { w - shiftX, 0, shiftX, h }, { 0, 0, -shiftX, h },
+                        { 0, h - shiftY, w, shiftY }, { 0, 0, w, -shiftY } };
+                    for (SDL_Rect strip : strips)
+                        if (strip.w > 0 && strip.h > 0) rects.push_back(strip);
+                }
+                SDL_Rect dirty = dirtyRect();
+                if (dirty.w > 0 && dirty.h > 0) {
+                    bool inside = false;
+                    for (const SDL_Rect& rect : rects)
+                        if (contains(rect, dirty)) inside = true;
+                    if (!inside) rects.push_back(dirty);
+                }
+            }
+            composeRects(rects, true);
+            cpuFill = rects;
+            ++gGpuCpuFillFrames;
+        }
+    }
+
+    // Nothing moved, nothing changed and the texture still holds exactly
+    // this composition: replaying it again would redraw the same image.
+    const uint64_t currentHash = gGpuCommands.empty() ? 0 : gpuCommandHash();
+    if (skipMode && devAutotestIsEnabled())
+        debugPrint("HD gpu present shift=%d,%d gx=%d src=%d,%d shifted=%d fill=%zu cpu=%zu cmds=%zu dirty=%d,%d..%d,%d all=%d unsup=%d same=%d\n",
+            shiftX, shiftY, gScrollX, source.x * 2, source.y * 2, shifted, fill.size(), cpuFill.size(), gGpuCommands.size(),
+            gDirtyLeft, gDirtyTop, gDirtyRight, gDirtyBottom, gDirtyAll,
+            gGpuCompositionUnsupported, sameSource);
+    bool skipReplay = false;
+    if (skipMode && !shiftCopied && !gDirtyAll && canReplay() && gReplayStateValid
+        && gTextureEpoch == gLastReplayEpoch) {
+        skipReplay = currentHash == gLastReplayHash;
+        if (!skipReplay) gReplayStateValid = false;
+    }
+    bool replayed = false;
+    if (skipReplay) {
+        // The texture already shows this image.
+        replayed = true;
+        reusedTexture = true;
+        gDirtyAll = false;
+        gDirtyLeft = gDirtyTop = gDirtyRight = gDirtyBottom = 0;
+    } else if (canReplay()) {
+        Uint64 composeStart = SDL_GetPerformanceCounter();
+        if (gpuReplayCommands(renderer, source)) {
+            gpuComposeMs = elapsedMs(composeStart, SDL_GetPerformanceCounter());
+            gpuFull = gDirtyAll;
+            replayed = true;
+            ++gGpuReplayFrames;
+            gGpuReplayPixels += gFrameReplayPixels;
+            gGpuReplayCommands += gFrameReplayCommands;
+            // The commands cover the CPU dirty area. A viewport shift can
+            // still expose pixels outside it; upload those strips below.
+            reusedTexture = true;
+            gDirtyAll = false;
+            gDirtyLeft = gDirtyTop = gDirtyRight = gDirtyBottom = 0;
+        } else {
+            gDirtyAll = true;
+        }
+    } else if (gGpuCompositionUnsupported) {
+        ++gGpuUnsupportedFrames;
+    } else if (!gGpuCommands.empty()) {
+        ++gGpuMissFrames;
+    }
     std::vector<SDL_Rect> updates;
+    if (skipMode) {
+        // Only rects composed on the CPU may be converted from that buffer.
+        updates = cpuFill;
+        gDirtyLeft = gDirtyTop = gDirtyRight = gDirtyBottom = 0;
+    } else {
     if (reusedTexture) {
         if (shiftX > 0) updates.push_back({ w - shiftX, 0, shiftX, h });
         if (shiftX < 0) updates.push_back({ 0, 0, -shiftX, h });
@@ -762,9 +1248,29 @@ bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FR
         updates.clear();
         updates.push_back(textureRect);
     }
-    gLastUpdateFull = updates.size() == 1 && updates[0].w == w && updates[0].h == h;
-    gLastUpdatePixels = 0;
-    gLastConvertMs = gLastUploadMs = 0.0;
+    }
+    if (skipMode && devAutotestIsEnabled())
+        debugPrint("HD gpu done shifted=%d copy=%d replayed=%d skip=%d updates=%zu unsup=%d full=%d\n",
+            shiftCopied, reusedTexture, replayed, skipReplay, updates.size(),
+            gGpuCompositionUnsupported, gDirtyAll);
+    gGpuCommands.clear();
+    gGpuCompositionUnsupported = false;
+    gLastUpdateFull = gpuFull || (updates.size() == 1 && updates[0].w == w && updates[0].h == h);
+    gLastUpdatePixels = gpuFull ? w * h
+        : static_cast<int>(std::min<uint64_t>(gFrameReplayPixels, static_cast<uint64_t>(w) * h));
+    gLastConvertMs = 0.0;
+    gLastUploadMs = gpuComposeMs;
+    gLastReplayMs = gpuComposeMs;
+    if (!updates.empty()) ++gTextureEpoch;
+    if (!skipReplay) {
+        if (replayed && updates.empty() && !shiftCopied) {
+            gReplayStateValid = true;
+            gLastReplayHash = currentHash;
+            gLastReplayEpoch = gTextureEpoch;
+        } else {
+            gReplayStateValid = false;
+        }
+    }
     for (const SDL_Rect& update : updates) {
         gLastUpdatePixels += update.w * update.h;
         Uint64 started = SDL_GetPerformanceCounter();
@@ -815,6 +1321,11 @@ bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FR
     gPresentedRevision = gRevision;
     gPresentedSource = source;
     Uint64 copyStart = SDL_GetPerformanceCounter();
+    // Binding a target inside the replay resets SDL's clip state (see
+    // `gpuReplayCommands`); the world view relies on its clip at this blit.
+    if (devAutotestIsEnabled() && !SDL_RenderIsClipEnabled(renderer))
+        devAutotestNote("HD present blit lost its clip rect dest=%.3f,%.3f %.3fx%.3f\n",
+            dest.x, dest.y, dest.w, dest.h);
     SDL_RenderCopyF(renderer, gTexture, &textureRect, &dest);
     gLastUploadMs += elapsedMs(copyStart, SDL_GetPerformanceCounter());
     return true;
@@ -852,9 +1363,11 @@ bool hdWorldVerifyTextureColors(SDL_Renderer* renderer)
         && std::abs(static_cast<int>(actual[2]) - static_cast<int>(expected & 255)) <= 1;
 }
 
-bool hdWorldVerifyTextureExact(SDL_Renderer* renderer, size_t* changedPixels)
+bool hdWorldVerifyTextureExact(SDL_Renderer* renderer, size_t* changedPixels, size_t* outOfTolerance)
 {
     *changedPixels = 0;
+    size_t outside = 0;
+    if (outOfTolerance != nullptr) *outOfTolerance = 0;
     if (!gTexture || gPresentedSource.w <= 0 || gPresentedSource.h <= 0) return false;
     int w = gPresentedSource.w * 2, h = gPresentedSource.h * 2;
     SDL_Texture* target = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_TARGET, w, h);
@@ -873,15 +1386,44 @@ bool hdWorldVerifyTextureExact(SDL_Renderer* renderer, size_t* changedPixels)
     if (clipped) SDL_RenderSetClipRect(renderer, &clip);
     SDL_DestroyTexture(target);
     if (!ok) return false;
+    int badLeft = w, badTop = h, badRight = -1, badBottom = -1;
     for (int y = 0; y < h; y++) {
         size_t src = (static_cast<size_t>(gPresentedSource.y) * 2 + y) * gWidth * 2 + gPresentedSource.x * 2;
         for (int x = 0; x < w; x++) {
             uint32_t expected = screenTransformWorldColor(livePixel(src + x));
             const unsigned char* pixel = actual.data() + (static_cast<size_t>(y) * w + x) * 4;
-            *changedPixels += pixel[0] != ((expected >> 16) & 255)
-                || pixel[1] != ((expected >> 8) & 255)
-                || pixel[2] != (expected & 255);
+            int delta = std::max({ std::abs(static_cast<int>(pixel[0]) - static_cast<int>((expected >> 16) & 255)),
+                std::abs(static_cast<int>(pixel[1]) - static_cast<int>((expected >> 8) & 255)),
+                std::abs(static_cast<int>(pixel[2]) - static_cast<int>(expected & 255)) });
+            bool differs = delta != 0;
+            *changedPixels += differs;
+            // The GPU blends in fixed point, which can differ from the CPU's
+            // rounded blend by a few units; anything larger is a real error.
+            outside += delta > 4;
+            if (differs) {
+                badLeft = std::min(badLeft, x); badRight = std::max(badRight, x);
+                badTop = std::min(badTop, y); badBottom = std::max(badBottom, y);
+            }
         }
+    }
+    if (outOfTolerance != nullptr) *outOfTolerance = outside;
+    if (*changedPixels) {
+        debugPrint("HD texture mismatch bbox %d,%d..%d,%d of %dx%d (outside tolerance %zu)\n", badLeft, badTop, badRight, badBottom, w, h, outside);
+        // Dev QA: keep both sides of a mismatch so the difference can be seen.
+        std::vector<unsigned char> expectedPng(static_cast<size_t>(w) * h * 4);
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                uint32_t expected = screenTransformWorldColor(livePixel(
+                    (static_cast<size_t>(gPresentedSource.y) * 2 + y) * gWidth * 2
+                    + gPresentedSource.x * 2 + x));
+                unsigned char* out = expectedPng.data() + (static_cast<size_t>(y) * w + x) * 4;
+                out[0] = (expected >> 16) & 255;
+                out[1] = (expected >> 8) & 255;
+                out[2] = expected & 255;
+                out[3] = 255;
+            }
+        lodepng::encode("hd-verify-actual.png", actual, w, h, LCT_RGBA, 8);
+        lodepng::encode("hd-verify-expected.png", expectedPng, w, h, LCT_RGBA, 8);
     }
     return true;
 }
@@ -890,6 +1432,11 @@ void hdWorldLastPresentTiming(double* convertMs, double* uploadMs)
 {
     *convertMs = gLastConvertMs;
     *uploadMs = gLastUploadMs;
+}
+
+void hdWorldLastGpuTiming(double* replayMs)
+{
+    *replayMs = gLastReplayMs;
 }
 
 void hdWorldLastUpdateStats(bool* full, int* pixels)
@@ -914,13 +1461,8 @@ void hdWorldPresentPathStats(bool* grayscale, size_t* cyclingPixels, int* thread
 
 void hdWorldResetRenderer()
 {
-    if (gTexture) SDL_DestroyTexture(gTexture);
-    if (gScrollTexture) SDL_DestroyTexture(gScrollTexture);
-    gTexture = nullptr;
-    gScrollTexture = nullptr;
-    gGpuScrollAvailable = false;
-    gScrollPending = false;
-    gScrollX = gScrollY = 0;
-    gPresentedRevision = 0;
+    resetWorldTexturesOnly();
+    gpuForgetFrames();
+    gGpuCompositionUnsupported = false;
 }
 } // namespace fallout

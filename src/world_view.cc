@@ -614,7 +614,9 @@ void worldViewRender(SDL_Renderer* renderer)
 
     Uint64 uploadStart;
     perfMonitorMark(&uploadStart);
-    bool ready = worldTextureUpload(renderer);
+    // The indexed world texture is only drawn when the HD present cannot
+    // happen (see `worldViewDraw`): HD frames skip its upload entirely.
+    bool ready = hdWorldActive() || worldTextureUpload(renderer);
     perfMonitorSpan(PerfSpan::WorldUpload, uploadStart);
     if (!ready) {
         return;
@@ -710,6 +712,9 @@ static void worldViewDraw(SDL_Renderer* renderer)
         if (presented) worldViewRenderOverlay(renderer, centerX, centerY);
         SDL_RenderSetClipRect(renderer, nullptr);
         if (presented) return;
+        // The HD present did not happen: the indexed path below needs the
+        // world texture, so upload it now.
+        worldTextureUpload(renderer);
     }
 
     // Total scale from world pixels to physical pixels.
