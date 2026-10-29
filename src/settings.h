@@ -319,7 +319,12 @@ struct EnhancementSettings {
 
 struct GraphicsSettings {
     bool hd_art = true;
+#ifdef __ANDROID__
+    // Pixel A/B 2026-10-29: GPU scroll blit 3-4 ms vs 30-64 ms CPU scroll.
+    std::string hd_renderer = "gpu";
+#else
     std::string hd_renderer = "cpu";
+#endif
 #ifdef __ANDROID__
     int hd_cache_mb = 256;
 #else
