@@ -412,6 +412,9 @@ void initSettingsRegistry(bool isMapper)
 
 #define SECT graphics
     SETTING(hd_art);
+    SETTING_P(hd_renderer, [](std::string& value, const char*, const char*) {
+        if (value != "gpu") value = "cpu";
+    });
     SETTING_P(hd_cache_mb, clamp(0, 4096));
     SETTING_P(color_preset, [](std::string& value, const char*, const char*) {
         value = graphicsColorPresetName(graphicsColorPresetIndex(value.c_str()));

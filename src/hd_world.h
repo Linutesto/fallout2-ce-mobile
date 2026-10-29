@@ -37,8 +37,10 @@ void hdWorldOutline(const FrmId& id, Art* art, int frame, int rotation,
 void hdWorldCopyIndexedChanges(const Rect& rect, const unsigned char* before);
 bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FRect& dest);
 bool hdWorldVerifyTextureColors(SDL_Renderer* renderer);
+bool hdWorldVerifyTextureExact(SDL_Renderer* renderer, size_t* changedPixels);
 // CPU times for the most recent non-cached HD present (milliseconds).
 void hdWorldLastPresentTiming(double* convertMs, double* uploadMs);
+void hdWorldLastUpdateStats(bool* full, int* pixels);
 void hdWorldPresentPathStats(bool* grayscale, size_t* cyclingPixels, int* threads);
 void hdWorldResetRenderer();
 const uint32_t* hdWorldPixels();

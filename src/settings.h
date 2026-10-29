@@ -319,6 +319,7 @@ struct EnhancementSettings {
 
 struct GraphicsSettings {
     bool hd_art = true;
+    std::string hd_renderer = "cpu";
 #ifdef __ANDROID__
     int hd_cache_mb = 256;
 #else

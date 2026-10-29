@@ -3839,6 +3839,59 @@ static void devAutotestHdMatrix()
     hdWorldSettingsChanged();
 }
 
+static void devAutotestHdGameplay()
+{
+    // Match real frame shapes: small camera steps and critter-sized damage.
+    // Keep this separate from the forced full-refresh benchmark above.
+    FILE* gameplay = fopen((gDevAutotestOutputPath + "/hd-gameplay.csv").c_str(), "w");
+    if (!gameplay) exit(EXIT_FAILURE);
+    fprintf(gameplay, "segment,frame,total_ms,draw_ms,present_ms,full_update,updated_pixels\n");
+    auto runSegment = [&](const char* name, int frames, auto&& mutate) {
+        std::vector<double> values;
+        int full = 0, dirty = 0, cachedFrames = 0;
+        for (int i = 0; i < frames; i++) {
+            Uint64 start = SDL_GetPerformanceCounter();
+            mutate(i);
+            Uint64 drawn = SDL_GetPerformanceCounter();
+            worldViewRender(gSdlRenderer);
+            SDL_RenderFlush(gSdlRenderer);
+            Uint64 presented = SDL_GetPerformanceCounter();
+            bool whole = false;
+            int pixels = 0;
+            hdWorldLastUpdateStats(&whole, &pixels);
+            double draw = (drawn - start) * 1000.0 / SDL_GetPerformanceFrequency();
+            double present = (presented - drawn) * 1000.0 / SDL_GetPerformanceFrequency();
+            fprintf(gameplay, "%s,%d,%.5f,%.5f,%.5f,%d,%d\n", name, i, draw + present, draw, present, whole, pixels);
+            if (i >= 2) {
+                values.push_back(draw + present);
+                full += whole;
+                dirty += !whole && pixels > 0;
+                cachedFrames += pixels == 0;
+            }
+        }
+        std::sort(values.begin(), values.end());
+        double median = (values[(values.size() - 1) / 2] + values[values.size() / 2]) * 0.5;
+        devAutotestLog("HD gameplay %s frames=%zu p50=%.5f p95=%.5f max=%.5f full=%d dirty=%d cached=%d\n",
+            name, values.size(), median, values[values.size() * 95 / 100], values.back(), full, dirty, cachedFrames);
+    };
+    runSegment("scroll", 40, [&](int i) { worldViewPanBy(i < 20 ? 16.0f : -16.0f, 0.0f); });
+#ifndef __ANDROID__
+    size_t scrollChanged = 0;
+    bool scrollExact = hdWorldVerifyTextureExact(gSdlRenderer, &scrollChanged);
+    devAutotestLog("HD scroll texture vs CPU: readback=%d changed_pixels=%zu\n", scrollExact, scrollChanged);
+    if (!scrollExact || scrollChanged != 0) exit(EXIT_FAILURE);
+#endif
+    runSegment("critter_rect", 32, [&](int i) {
+        Rect visible;
+        worldViewGetVisibleRect(&visible);
+        int cx = (visible.left + visible.right) / 2 + (i % 4) * 4;
+        int cy = (visible.top + visible.bottom) / 2;
+        Rect rect = { cx - 24, cy - 36, cx + 24, cy + 36 };
+        tileWindowRefreshRect(&rect, gElevation);
+    });
+    fclose(gameplay);
+}
+
 static void devAutotestGraphics()
 {
     SDL_RendererInfo rendererInfo;
@@ -3954,6 +4007,8 @@ void devAutotestTick()
     }
 
     if (gDevAutotestStep >= gDevAutotestStepCount) {
+        if (gDevAutotestSteps == kDevAutotestHdSteps || gDevAutotestSteps == kDevAutotestHdDarkSteps)
+            devAutotestHdGameplay();
         devAutotestLog("autotest finished\n");
         exit(EXIT_SUCCESS);
     }

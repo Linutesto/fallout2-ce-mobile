@@ -45,6 +45,12 @@ namespace {
     std::vector<uint32_t> gPresentPixels;
     std::unique_ptr<HdFrameCache> gCache;
     SDL_Texture* gTexture = nullptr;
+    SDL_Texture* gScrollTexture = nullptr;
+    int gScrollX = 0, gScrollY = 0;
+    bool gScrollPending = false;
+    bool gGpuScrollAvailable = false;
+    bool gGpuScrollFailed = false;
+    bool gTextureGpuMode = false;
     uint64_t gRevision = 1;
     // CE: The part of the 2x buffer changed since the last present, so a
     // walking critter re-converts its own rectangle instead of the screen.
@@ -56,6 +62,8 @@ namespace {
     uint64_t gFallbackCount = 0;
     double gLastConvertMs = 0.0;
     double gLastUploadMs = 0.0;
+    bool gLastUpdateFull = false;
+    int gLastUpdatePixels = 0;
     bool gMeasureDraw = false;
     Uint64 gLookupTicks = 0, gFallbackTicks = 0, gBuildTicks = 0, gPixelTicks = 0;
     uint64_t gDrawCalls = 0;
@@ -264,6 +272,7 @@ namespace {
 void hdWorldInit(int width, int height)
 {
     hdWorldExit();
+    gGpuScrollFailed = false;
     gWidth = width;
     gHeight = height;
     gFallbackFilter = settings.world_view.filter;
@@ -392,7 +401,19 @@ void hdWorldScrolled(int dx, int dy)
 {
     if (!hdWorldActive() || gPixels.empty()) return;
     ++gRevision;
-    gDirtyAll = true;
+    if (settings.graphics.hd_renderer == "gpu" && !gDirtyAll) {
+        // The texture still contains the last presented view. Move that image
+        // on the GPU, then upload only the exposed band and any redraws.
+        if (gDirtyLeft < gDirtyRight || (gScrollPending &&
+                ((dx && gScrollX && (dx > 0) != (gScrollX > 0)) ||
+                    (dy && gScrollY && (dy > 0) != (gScrollY > 0)))))
+            gDirtyAll = true;
+        gScrollX += dx * 2;
+        gScrollY += dy * 2;
+        gScrollPending = true;
+    } else {
+        gDirtyAll = true;
+    }
     int w = gWidth * 2, h = gHeight * 2;
     dx *= 2;
     dy *= 2;
@@ -419,6 +440,7 @@ void hdWorldPaletteChanged(int first, int count)
     if (!hdWorldActive()) return;
     ++gRevision;
     gDirtyAll = true;
+    gScrollPending = false;
     // CE: Partial updates are the cycle's unfaded palette. Full palette
     // changes are gamma/fades, applied once by the display transform.
     if (first > 0)
@@ -431,6 +453,7 @@ void hdWorldGrayscale()
         gGrayscale = true;
         ++gRevision;
         gDirtyAll = true;
+        gScrollPending = false;
     }
 }
 
@@ -650,38 +673,100 @@ bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FR
     int w = source.w * 2, h = source.h * 2;
     int tw = 0, th = 0;
     if (gTexture) SDL_QueryTexture(gTexture, nullptr, nullptr, &tw, &th);
-    if (!gTexture || tw < w || th < h) {
+    bool wantGpu = settings.graphics.hd_renderer == "gpu" && !gGpuScrollFailed;
+    if (!gTexture || tw != w || th != h || gTextureGpuMode != wantGpu) {
         hdWorldResetRenderer();
-        w = std::max(w, tw);
-        h = std::max(h, th);
-        SDL_RendererInfo info;
+        SDL_RendererInfo info = { };
         if (SDL_GetRendererInfo(renderer, &info) == 0 && ((info.max_texture_width > 0 && w > info.max_texture_width) || (info.max_texture_height > 0 && h > info.max_texture_height))) {
             debugPrint("HD view exceeds renderer texture limits; using indexed view\n");
             return false;
         }
         // Upload only the converted dirty rectangle, preserving the faster
         // static texture path after verifying its GPU channel order.
-        gTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h);
+        if (wantGpu && (info.flags & SDL_RENDERER_TARGETTEXTURE)) {
+            gTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, w, h);
+            gScrollTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, w, h);
+            gGpuScrollAvailable = gTexture && gScrollTexture;
+        }
+        if (!gGpuScrollAvailable) {
+            if (wantGpu) debugPrint("HD GPU scroll targets unavailable; using static texture\n");
+            if (gTexture) SDL_DestroyTexture(gTexture);
+            if (gScrollTexture) SDL_DestroyTexture(gScrollTexture);
+            gScrollTexture = nullptr;
+            gTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h);
+        }
         if (!gTexture) return false;
+        gTextureGpuMode = wantGpu;
         SDL_SetTextureBlendMode(gTexture, SDL_BLENDMODE_NONE);
         SDL_SetTextureScaleMode(gTexture, SDL_ScaleModeNearest);
+        if (gScrollTexture) {
+            SDL_SetTextureBlendMode(gScrollTexture, SDL_BLENDMODE_NONE);
+            SDL_SetTextureScaleMode(gScrollTexture, SDL_ScaleModeNearest);
+        }
     }
     w = source.w * 2;
     h = source.h * 2;
     SDL_Rect textureRect = { 0, 0, w, h };
     bool sameSource = source.x == gPresentedSource.x && source.y == gPresentedSource.y && source.w == gPresentedSource.w && source.h == gPresentedSource.h;
     if (gPresentedRevision == gRevision && sameSource) {
+        gLastUpdateFull = false;
+        gLastUpdatePixels = 0;
         SDL_RenderCopyF(renderer, gTexture, &textureRect, &dest);
         return true;
     }
-    // Only the changed part, in texture coordinates, unless the view moved.
-    SDL_Rect update = textureRect;
-    if (!gDirtyAll && sameSource && gPresentedRevision != 0) {
+    // Reuse the texture for a camera step. This uses SDL render targets, which
+    // are backed by GL/GLES2 on the supported hardware renderers.
+    int shiftX = gScrollX + (source.x - gPresentedSource.x) * 2;
+    int shiftY = gScrollY + (source.y - gPresentedSource.y) * 2;
+    bool reusedTexture = false;
+    if (gGpuScrollAvailable && !gDirtyAll && gPresentedRevision != 0
+        && std::abs(shiftX) < w && std::abs(shiftY) < h) {
+        reusedTexture = true;
+        if (shiftX != 0 || shiftY != 0) {
+            SDL_Texture* oldTarget = SDL_GetRenderTarget(renderer);
+            SDL_Rect oldClip;
+            bool hadClip = SDL_RenderIsClipEnabled(renderer);
+            if (hadClip) SDL_RenderGetClipRect(renderer, &oldClip);
+            SDL_RenderSetClipRect(renderer, nullptr);
+            SDL_Rect from = { std::max(shiftX, 0), std::max(shiftY, 0), w - std::abs(shiftX), h - std::abs(shiftY) };
+            SDL_Rect to = { std::max(-shiftX, 0), std::max(-shiftY, 0), from.w, from.h };
+            if (SDL_SetRenderTarget(renderer, gScrollTexture) == 0) {
+                reusedTexture = SDL_RenderCopy(renderer, gTexture, &from, &to) == 0;
+                SDL_SetRenderTarget(renderer, oldTarget);
+            }
+            if (hadClip) SDL_RenderSetClipRect(renderer, &oldClip);
+            if (reusedTexture) std::swap(gTexture, gScrollTexture);
+        }
+    }
+    std::vector<SDL_Rect> updates;
+    if (reusedTexture) {
+        if (shiftX > 0) updates.push_back({ w - shiftX, 0, shiftX, h });
+        if (shiftX < 0) updates.push_back({ 0, 0, -shiftX, h });
+        if (shiftY > 0) updates.push_back({ 0, h - shiftY, w, shiftY });
+        if (shiftY < 0) updates.push_back({ 0, 0, w, -shiftY });
+    }
+    if (!gDirtyAll && gPresentedRevision != 0) {
         int left = std::max(gDirtyLeft - source.x * 2, 0), top = std::max(gDirtyTop - source.y * 2, 0);
         int right = std::min(gDirtyRight - source.x * 2, w), bottom = std::min(gDirtyBottom - source.y * 2, h);
-        update = { left, top, std::max(right - left, 0), std::max(bottom - top, 0) };
+        SDL_Rect dirty = { left, top, std::max(right - left, 0), std::max(bottom - top, 0) };
+        if (dirty.w > 0 && dirty.h > 0) {
+            bool covered = false;
+            for (const SDL_Rect& update : updates)
+                if (dirty.x >= update.x && dirty.y >= update.y
+                    && dirty.x + dirty.w <= update.x + update.w
+                    && dirty.y + dirty.h <= update.y + update.h) covered = true;
+            if (!covered) updates.push_back(dirty);
+        }
     }
-    if (update.w > 0 && update.h > 0) {
+    if (!reusedTexture && (gDirtyAll || !sameSource || gPresentedRevision == 0 || gScrollPending)) {
+        updates.clear();
+        updates.push_back(textureRect);
+    }
+    gLastUpdateFull = updates.size() == 1 && updates[0].w == w && updates[0].h == h;
+    gLastUpdatePixels = 0;
+    gLastConvertMs = gLastUploadMs = 0.0;
+    for (const SDL_Rect& update : updates) {
+        gLastUpdatePixels += update.w * update.h;
         Uint64 started = SDL_GetPerformanceCounter();
         // Keep the full-screen allocation through smaller dirty updates so
         // the next scroll never has to zero-initialize megabytes again.
@@ -708,12 +793,24 @@ bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FR
         for (auto& worker : workers)
             worker.join();
         Uint64 converted = SDL_GetPerformanceCounter();
-        if (SDL_UpdateTexture(gTexture, &update, gPresentPixels.data(), update.w * sizeof(uint32_t)) != 0) return false;
+        if (SDL_UpdateTexture(gTexture, &update, gPresentPixels.data(), update.w * sizeof(uint32_t)) != 0) {
+            if (gGpuScrollAvailable) {
+                // Some GLES2 backends may reject subimage uploads to a target.
+                // Keep the HD picture by falling back to the static texture.
+                gGpuScrollFailed = true;
+                debugPrint("HD GPU scroll target upload failed; using static texture: %s\n", SDL_GetError());
+                hdWorldResetRenderer();
+                return hdWorldPresent(renderer, source, dest);
+            }
+            return false;
+        }
         Uint64 uploaded = SDL_GetPerformanceCounter();
-        gLastConvertMs = elapsedMs(allocated, converted);
-        gLastUploadMs = elapsedMs(started, allocated) + elapsedMs(converted, uploaded);
+        gLastConvertMs += elapsedMs(allocated, converted);
+        gLastUploadMs += elapsedMs(started, allocated) + elapsedMs(converted, uploaded);
     }
     gDirtyAll = false;
+    gScrollPending = false;
+    gScrollX = gScrollY = 0;
     gDirtyLeft = gDirtyTop = gDirtyRight = gDirtyBottom = 0;
     gPresentedRevision = gRevision;
     gPresentedSource = source;
@@ -755,10 +852,50 @@ bool hdWorldVerifyTextureColors(SDL_Renderer* renderer)
         && std::abs(static_cast<int>(actual[2]) - static_cast<int>(expected & 255)) <= 1;
 }
 
+bool hdWorldVerifyTextureExact(SDL_Renderer* renderer, size_t* changedPixels)
+{
+    *changedPixels = 0;
+    if (!gTexture || gPresentedSource.w <= 0 || gPresentedSource.h <= 0) return false;
+    int w = gPresentedSource.w * 2, h = gPresentedSource.h * 2;
+    SDL_Texture* target = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_TARGET, w, h);
+    if (!target) return false;
+    SDL_SetTextureBlendMode(target, SDL_BLENDMODE_NONE);
+    SDL_Texture* previous = SDL_GetRenderTarget(renderer);
+    SDL_Rect clip;
+    bool clipped = SDL_RenderIsClipEnabled(renderer);
+    if (clipped) SDL_RenderGetClipRect(renderer, &clip);
+    SDL_RenderSetClipRect(renderer, nullptr);
+    std::vector<unsigned char> actual(static_cast<size_t>(w) * h * 4);
+    bool ok = SDL_SetRenderTarget(renderer, target) == 0
+        && SDL_RenderCopy(renderer, gTexture, nullptr, nullptr) == 0
+        && SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ABGR8888, actual.data(), w * 4) == 0;
+    SDL_SetRenderTarget(renderer, previous);
+    if (clipped) SDL_RenderSetClipRect(renderer, &clip);
+    SDL_DestroyTexture(target);
+    if (!ok) return false;
+    for (int y = 0; y < h; y++) {
+        size_t src = (static_cast<size_t>(gPresentedSource.y) * 2 + y) * gWidth * 2 + gPresentedSource.x * 2;
+        for (int x = 0; x < w; x++) {
+            uint32_t expected = screenTransformWorldColor(livePixel(src + x));
+            const unsigned char* pixel = actual.data() + (static_cast<size_t>(y) * w + x) * 4;
+            *changedPixels += pixel[0] != ((expected >> 16) & 255)
+                || pixel[1] != ((expected >> 8) & 255)
+                || pixel[2] != (expected & 255);
+        }
+    }
+    return true;
+}
+
 void hdWorldLastPresentTiming(double* convertMs, double* uploadMs)
 {
     *convertMs = gLastConvertMs;
     *uploadMs = gLastUploadMs;
+}
+
+void hdWorldLastUpdateStats(bool* full, int* pixels)
+{
+    *full = gLastUpdateFull;
+    *pixels = gLastUpdatePixels;
 }
 
 void hdWorldPresentPathStats(bool* grayscale, size_t* cyclingPixels, int* threads)
@@ -778,7 +915,12 @@ void hdWorldPresentPathStats(bool* grayscale, size_t* cyclingPixels, int* thread
 void hdWorldResetRenderer()
 {
     if (gTexture) SDL_DestroyTexture(gTexture);
+    if (gScrollTexture) SDL_DestroyTexture(gScrollTexture);
     gTexture = nullptr;
+    gScrollTexture = nullptr;
+    gGpuScrollAvailable = false;
+    gScrollPending = false;
+    gScrollX = gScrollY = 0;
     gPresentedRevision = 0;
 }
 } // namespace fallout
