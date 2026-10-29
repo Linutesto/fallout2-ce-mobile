@@ -207,7 +207,18 @@ android {
             externalNativeBuild {
                 cmake {
                     // After release's arguments: the last one counts.
-                    arguments '-DCMAKE_BUILD_TYPE=Release', '-DFALLOUT_DIAGNOSTICS=ON'
+                    //
+                    // A player's phone build (`assemblePhone -Pfallout2ce.hd`)
+                    // is shipped with the recorders off, as the release is:
+                    // with FALLOUT_DIAGNOSTICS=ON the touch recorder and the
+                    // game journal are forced on for the whole run
+                    // (src/settings.cc settingsInit, src/touch_log.cc,
+                    // src/action_log.cc) and write files while playing.
+                    //
+                    // `-Pfallout2ce.bench` keeps them on: that build is a
+                    // debuggable on-device test copy, never the player's.
+                    arguments '-DCMAKE_BUILD_TYPE=Release',
+                        "-DFALLOUT_DIAGNOSTICS=${project.hasProperty('fallout2ce.bench') ? 'ON' : 'OFF'}"
                 }
             }
         }

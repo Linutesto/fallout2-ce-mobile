@@ -66,6 +66,16 @@
         <meta-data android:name="SDL_ENV.SDL_ACCELEROMETER_AS_JOYSTICK" android:value="0"/>
          -->
 
+        <!-- Sustained performance mode (Window.setSustainedPerformanceMode),
+             read by MainActivity: the device holds one clock level instead of
+             bursting and then throttling, so frame times stay even over long
+             sessions, at the cost of peak clocks. "false" keeps a benchmark
+             on the phone's full speeds; flip to "true" to measure the other
+             side of the trade (unsupported devices ignore it). -->
+        <meta-data
+            android:name="io.github.imbaner.fallout2ce.SUSTAINED_PERFORMANCE"
+            android:value="false" />
+
         <activity android:name=".HdUpdateActivity"
             android:theme="@style/AppTheme"
             android:screenOrientation="landscape"
@@ -84,6 +94,7 @@
             android:preferMinimalPostProcessing="true"
             android:exported="true"
             android:screenOrientation="landscape"
+            android:keepScreenOn="true"
             >
             <!-- Let Android know that we can handle some USB devices and should receive this event -->
             <intent-filter>

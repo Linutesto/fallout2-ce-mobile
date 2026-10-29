@@ -28,8 +28,13 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 
 public class MainActivity extends SDLActivity {
+    // Application meta-data (AndroidManifest.xml): sustained performance mode.
+    private static final String SUSTAINED_PERFORMANCE_META =
+        "io.github.imbaner.fallout2ce.SUSTAINED_PERFORMANCE";
+
     private boolean noExit = false;
     private boolean highRefresh = true;
+    private boolean sustainedPerformance = false;
     private volatile float currentRefreshRate = 60.0f;
     private DisplayManager displayManager;
     private final DisplayManager.DisplayListener refreshListener = new DisplayManager.DisplayListener() {
@@ -79,9 +84,15 @@ public class MainActivity extends SDLActivity {
         float target = RefreshRatePolicy.choose(highRefresh, rates);
         WindowManager.LayoutParams params = getWindow().getAttributes();
         params.preferredRefreshRate = target;
-        // pre-30 devices have no Surface.setFrameRate API.
+        // The exact mode, asked for on every API level: preferredRefreshRate
+        // is only a hint, and Surface.setFrameRate (below) does not raise a
+        // panel that is already sitting at its current mode. The current mode
+        // when it already runs at the target (no switch, no flash), else the
+        // first mode at this resolution and rate; 0 is "let the system pick".
         params.preferredDisplayModeId = 0;
-        if (Build.VERSION.SDK_INT < 30) {
+        if (Math.abs(current.getRefreshRate() - target) < 0.5f) {
+            params.preferredDisplayModeId = current.getModeId();
+        } else {
             for (Display.Mode mode : modes) {
                 if (mode.getPhysicalWidth() == current.getPhysicalWidth()
                         && mode.getPhysicalHeight() == current.getPhysicalHeight()
@@ -110,6 +121,32 @@ public class MainActivity extends SDLActivity {
             if (displayManager != null) displayManager.registerDisplayListener(refreshListener, null);
         }
         applyRefreshRate();
+        applySustainedPerformance();
+    }
+
+    // Sustained performance mode (Window.setSustainedPerformanceMode): the
+    // device holds one clock level instead of bursting and throttling, so
+    // frame times stay even over a long session, at the cost of peak clocks.
+    // The manifest's meta-data decides (an option, see AndroidManifest.xml);
+    // devices without the mode are never asked (PowerManager, below).
+    private boolean sustainedPerformanceRequested() {
+        try {
+            android.os.Bundle meta = getPackageManager()
+                .getApplicationInfo(getPackageName(), PackageManager.GET_META_DATA).metaData;
+            return meta != null && meta.getBoolean(SUSTAINED_PERFORMANCE_META, false);
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        }
+    }
+
+    private void applySustainedPerformance() {
+        // Window.setSustainedPerformanceMode is void and quietly ignored where
+        // there is no such mode; PowerManager is the way to ask first.
+        android.os.PowerManager power = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
+        boolean supported = power != null && power.isSustainedPerformanceModeSupported();
+        getWindow().setSustainedPerformanceMode(sustainedPerformance && supported);
+        android.util.Log.i("Wasteland", "Sustained performance requested=" + sustainedPerformance
+                + " supported=" + supported);
     }
 
     @Override public void onWindowFocusChanged(boolean focused) {
@@ -119,6 +156,7 @@ public class MainActivity extends SDLActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        sustainedPerformance = sustainedPerformanceRequested();
         final File externalFilesDir = getExternalFilesDir(null);
         final File savesDirectory;
         try {
