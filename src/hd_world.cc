@@ -72,10 +72,18 @@ namespace {
     uint64_t gDrawCalls = 0;
     uint64_t gLightMapCalls = 0, gMaskCalls = 0, gTintCalls = 0, gOpacityCalls = 0;
     uint64_t gFallbackCalls = 0, gOutlineCalls = 0, gIndexedCalls = 0;
+    struct GpuAtlasPage {
+        SDL_Texture* texture = nullptr;
+        int x = 0, y = 0, rowHeight = 0;
+        ~GpuAtlasPage() { if (texture) SDL_DestroyTexture(texture); }
+    };
+    std::vector<std::shared_ptr<GpuAtlasPage>> gGpuAtlasPages;
     struct GpuFrameTexture {
         SDL_Texture* texture = nullptr;
+        std::shared_ptr<GpuAtlasPage> atlas;
+        int atlasX = 0, atlasY = 0;
         std::shared_ptr<const HdFrame> frame;
-        ~GpuFrameTexture() { if (texture) SDL_DestroyTexture(texture); }
+        ~GpuFrameTexture() { if (texture && !atlas) SDL_DestroyTexture(texture); }
     };
     struct GpuCommand {
         enum Kind { Clear, Draw, Fill } kind;
@@ -110,6 +118,7 @@ namespace {
     uint64_t gLastReplayHash = 0;
     uint64_t gLastReplayEpoch = 0;
     bool gReplayStateValid = false;
+    uint32_t paletteColor(int index, bool cycling);
 
     bool gpuCompositionRequested()
     {
@@ -130,6 +139,7 @@ namespace {
         gGpuCommands.clear();
         gGpuFrames.clear();
         gGpuLru.clear();
+        gGpuAtlasPages.clear();
         gGpuFrameBytes = 0;
     }
 
@@ -155,7 +165,7 @@ namespace {
         int worldX, int worldY, int left, int top, int right, int bottom,
         int light, const HdDrawOptions& options, bool isHd)
     {
-        if (!frame || !gSdlRenderer || options.tint >= 0) return nullptr;
+        if (!frame || !gSdlRenderer) return nullptr;
         int w = frame->width, h = frame->height;
         uint64_t shape = 1469598103934665603ull;
         auto fold = [&](uint64_t value) { shape = (shape ^ value) * 1099511628211ull; };
@@ -172,7 +182,8 @@ namespace {
                     fold(options.mask[(y - options.maskY) * options.maskPitch + x - options.maskX]);
         }
         std::string key = std::to_string(reinterpret_cast<uintptr_t>(frame.get())) + ":" + std::to_string(isHd)
-            + ":" + std::to_string(light) + ":" + std::to_string(options.opacity) + ":" + std::to_string(shape)
+            + ":" + std::to_string(light) + ":" + std::to_string(options.opacity) + ":" + std::to_string(options.tint)
+            + ":" + std::to_string(options.glass) + ":" + std::to_string(shape)
             + ":" + std::to_string(gGpuColorVersion);
         auto found = gGpuFrames.find(key);
         if (found != gGpuFrames.end()) {
@@ -208,6 +219,29 @@ namespace {
                 if (hdIsCycling(index)) color = gCycleColors[index];
                 int alpha = color >> 24;
                 if (!alpha) continue;
+                if (options.tint >= 0) {
+                    int intensity = light;
+                    if (options.lightMap && index)
+                        intensity = hdInterpolateLight(options.lightMap, options.lightPitch,
+                            originalWidth, originalHeight, sx, sy, original);
+                    int row = hdBlendRow(color, options.glass);
+                    uint32_t tint = paletteColor(options.tint, false);
+                    double coverage = alpha * options.opacity / (255.0 * 255.0);
+                    double lit = std::clamp(intensity, 0, 65536) / 65536.0;
+                    double base = row <= 7 ? lit * (1.0 - row / 7.0) : 0.0;
+                    double outAlpha = coverage * (1.0 - base);
+                    if (outAlpha <= 0.0) continue;
+                    uint32_t solid = hdLight(hdBlend(0xFF000000, tint, row), intensity);
+                    uint32_t packed = 0;
+                    for (int shift : { 0, 8, 16 }) {
+                        double component = ((solid >> shift) & 255) / (1.0 - base);
+                        packed |= static_cast<uint32_t>(std::clamp(int(component + 0.5), 0, 255)) << shift;
+                    }
+                    pixels[static_cast<size_t>(sy) * w + sx] =
+                        (static_cast<uint32_t>(std::clamp(int(outAlpha * 255 + 0.5), 0, 255)) << 24)
+                        | (screenTransformWorldColor(packed | 0xFF000000) & 0xFFFFFF);
+                    continue;
+                }
                 if (isHd && !hdIsCycling(index)) {
                     int intensity = light;
                     if (options.lightMap && index && !plain)
@@ -226,9 +260,40 @@ namespace {
             }
         auto entry = std::make_shared<GpuFrameTexture>();
         entry->frame = frame;
-        entry->texture = SDL_CreateTexture(gSdlRenderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h);
-        if (!entry->texture || SDL_UpdateTexture(entry->texture, nullptr, pixels.data(), w * sizeof(uint32_t)) != 0)
-            return nullptr;
+        // Small frames share static atlas pages. SDL batches consecutive
+        // RenderCopy calls that use one page, without changing draw order.
+        // Leave room for the decoded-frame and standalone texture cache.
+        if (w <= 512 && h <= 512 && budget >= 64ull * 1024 * 1024) {
+            std::shared_ptr<GpuAtlasPage> page;
+            for (auto& candidate : gGpuAtlasPages) {
+                int px = candidate->x + w <= 2048 ? candidate->x : 0;
+                int py = candidate->y + (px == 0 && candidate->x != 0 ? candidate->rowHeight : 0);
+                if (py + h <= 2048) { page = candidate; break; }
+            }
+            if (!page && gGpuAtlasPages.size() < budget / (2ull * 2048 * 2048 * 4)) {
+                page = std::make_shared<GpuAtlasPage>();
+                page->texture = SDL_CreateTexture(gSdlRenderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, 2048, 2048);
+                if (page->texture) {
+                    SDL_SetTextureBlendMode(page->texture, SDL_BLENDMODE_BLEND);
+                    SDL_SetTextureScaleMode(page->texture, SDL_ScaleModeNearest);
+                    gGpuAtlasPages.push_back(page);
+                } else page.reset();
+            }
+            if (page) {
+                if (page->x + w > 2048) { page->y += page->rowHeight; page->x = 0; page->rowHeight = 0; }
+                SDL_Rect region = { page->x, page->y, w, h };
+                if (SDL_UpdateTexture(page->texture, &region, pixels.data(), w * sizeof(uint32_t)) != 0) return nullptr;
+                entry->atlas = page;
+                entry->texture = page->texture;
+                entry->atlasX = page->x; entry->atlasY = page->y;
+                page->x += w; page->rowHeight = std::max(page->rowHeight, h);
+            }
+        }
+        if (!entry->texture) {
+            entry->texture = SDL_CreateTexture(gSdlRenderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h);
+            if (!entry->texture || SDL_UpdateTexture(entry->texture, nullptr, pixels.data(), w * sizeof(uint32_t)) != 0)
+                return nullptr;
+        }
         SDL_SetTextureBlendMode(entry->texture, SDL_BLENDMODE_BLEND);
         SDL_SetTextureScaleMode(entry->texture, SDL_ScaleModeNearest);
         gGpuLru.push_front(key);
@@ -474,8 +539,8 @@ namespace {
             if (!SDL_IntersectRect(&command.rect, &visible, &overlap)) continue;
             SDL_Rect target = { overlap.x - visible.x, overlap.y - visible.y, overlap.w, overlap.h };
             if (command.kind == GpuCommand::Draw) {
-                SDL_Rect artSource = { command.source.x + overlap.x - command.rect.x,
-                    command.source.y + overlap.y - command.rect.y, overlap.w, overlap.h };
+                SDL_Rect artSource = { command.source.x + overlap.x - command.rect.x + command.art->atlasX,
+                    command.source.y + overlap.y - command.rect.y + command.art->atlasY, overlap.w, overlap.h };
                 ok = SDL_RenderCopy(renderer, command.art->texture, &artSource, &target) == 0;
             } else {
                 uint32_t color = command.kind == GpuCommand::Clear ? screenTransformWorldColor(0xFF000000) : command.color;
@@ -768,7 +833,7 @@ void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
     }
     // These counts are only consumed by the screenshot QA. Building a unique
     // string for every visible tile on every real frame is otherwise wasted.
-    if (devAutotestIsEnabled() && !gMeasureDraw) {
+    if (devAutotestIsEnabled() && !gMeasureDraw && !gGpuTimedFast) {
         std::string drawKey = std::string(id.filePath()) + ":" + std::to_string(rotation) + ":" + std::to_string(frame) + ":" + std::to_string(x) + ":" + std::to_string(y);
         if (gCountedDraws.insert(drawKey).second) {
             if (hd)
@@ -778,9 +843,6 @@ void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
         }
     }
     const unsigned char* original = artGetFrameData(art, frame, static_cast<Rotation>(rotation));
-    uint32_t cyclingPalette[256] = { };
-    for (int i = 229; i <= 254; i++)
-        cyclingPalette[i] = paletteColor(i);
     // CE: Fallback art keeps the native palette's quantized lighting. Cache
     // the lit frame before magnifying it; HD itself keeps linear RGB light.
     std::string fallbackKey;
@@ -822,6 +884,9 @@ void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
         }
     }
     if (gpuSkipCpu()) return;
+    uint32_t cyclingPalette[256] = { };
+    for (int i = 229; i <= 254; i++)
+        cyclingPalette[i] = paletteColor(i);
     // CE: Most pixels of a refresh are opaque, unmasked and uncycled; they
     // take a direct store. Everything else goes through writePixel below.
     const bool plain = options.tint < 0 && !options.mask && options.opacity == 255;
@@ -909,10 +974,14 @@ void hdWorldOutline(const FrmId& id, Art* art, int frame, int rotation,
     if (!hdWorldActive() || gPixels.empty()) return;
     ++gRevision;
     int w = artGetWidth(art, frame, static_cast<Rotation>(rotation)), h = artGetHeight(art, frame, static_cast<Rotation>(rotation));
-    if (gpuCompositionRequested()) gGpuCompositionUnsupported = true;
-    touch(std::max({ x - 1, clip.left, 0 }) * 2, std::max({ y - 1, clip.top, 0 }) * 2,
-        std::min({ x + w + 1, clip.right + 1, gWidth }) * 2, std::min({ y + h + 1, clip.bottom + 1, gHeight }) * 2);
-    if (gpuSkipCpu()) return;
+    SDL_Rect outlineRect = { std::max({ x - 1, clip.left, 0 }) * 2, std::max({ y - 1, clip.top, 0 }) * 2,
+        (std::min({ x + w + 1, clip.right + 1, gWidth }) - std::max({ x - 1, clip.left, 0 })) * 2,
+        (std::min({ y + h + 1, clip.bottom + 1, gHeight }) - std::max({ y - 1, clip.top, 0 })) * 2 };
+    touch(outlineRect.x, outlineRect.y, outlineRect.x + outlineRect.w, outlineRect.y + outlineRect.h);
+    bool onGpu = gpuCompositionRequested() && !gGpuCompositionUnsupported && outlineRect.w > 0 && outlineRect.h > 0;
+    bool skipCpu = gpuSkipCpu();
+    std::vector<uint32_t> outlinePixels;
+    if (onGpu) outlinePixels.resize(static_cast<size_t>(outlineRect.w) * outlineRect.h);
     auto hd = frameFor(id, frame, rotation, w, h);
     auto original = artGetFrameData(art, frame, static_cast<Rotation>(rotation));
     auto opaque = [&](int sx, int sy) {
@@ -921,8 +990,8 @@ void hdWorldOutline(const FrmId& id, Art* art, int frame, int rotation,
     };
     int coverWidth = 0, coverHeight = 0, coverPitch = 0;
     const auto* cover = objectSeeThroughCover(&coverWidth, &coverHeight, &coverPitch);
-    for (int dy = std::max({ y - 1, clip.top, 0 }) * 2; dy < std::min({ y + h + 1, clip.bottom + 1, gHeight }) * 2; dy++)
-        for (int dx = std::max({ x - 1, clip.left, 0 }) * 2; dx < std::min({ x + w + 1, clip.right + 1, gWidth }) * 2; dx++) {
+    for (int dy = outlineRect.y; dy < outlineRect.y + outlineRect.h; dy++)
+        for (int dx = outlineRect.x; dx < outlineRect.x + outlineRect.w; dx++) {
             int sx = dx - x * 2, sy = dy - y * 2;
             if (opaque(sx, sy)) continue;
             bool edge = false;
@@ -935,7 +1004,6 @@ void hdWorldOutline(const FrmId& id, Art* art, int frame, int rotation,
             size_t destOffset = static_cast<size_t>(dy) * gWidth * 2 + dx;
             uint32_t& dest = gPixels[destOffset];
             int blendRow = hdBlendRow(c, false);
-            if (tint >= 0) c = hdBlend(dest, paletteColor(tint, false), blendRow);
             int opacity = 255;
             if (cover && dx / 2 < coverWidth && dy / 2 < coverHeight) {
                 if (cover[(dy / 2) * coverPitch + dx / 2] == static_cast<unsigned char>(ObjectSeeThroughCover::Top)) continue;
@@ -951,8 +1019,33 @@ void hdWorldOutline(const FrmId& id, Art* art, int frame, int rotation,
                 // its complete outline, like the native tactical renderer.
                 if (beside && !seen && bandCount == 0) opacity = 90;
             }
-            writePixel(destOffset, c, opacity, hdIsCycling(index) && tint < 0 ? index : 0, tint >= 0 ? (7 - blendRow) * 255 / 7 : 0);
+            if (!skipCpu) {
+                uint32_t cpuColor = tint >= 0 ? hdBlend(dest, paletteColor(tint, false), blendRow) : c;
+                writePixel(destOffset, cpuColor, opacity, hdIsCycling(index) && tint < 0 ? index : 0,
+                    tint >= 0 ? (7 - blendRow) * 255 / 7 : 0);
+            }
+            if (onGpu) {
+                if (tint >= 0) {
+                    c = blendRow <= 7 ? paletteColor(tint, false) : hdBlend(0xFF000000, paletteColor(tint, false), blendRow);
+                    opacity = opacity * std::min(blendRow, 7) / 7;
+                } else if (hdIsCycling(index)) c = gCycleColors[index];
+                outlinePixels[static_cast<size_t>(dy - outlineRect.y) * outlineRect.w + dx - outlineRect.x] =
+                    (static_cast<uint32_t>(opacity) << 24) | (screenTransformWorldColor(c) & 0xFFFFFF);
+            }
         }
+    if (onGpu) {
+        auto entry = std::make_shared<GpuFrameTexture>();
+        entry->texture = SDL_CreateTexture(gSdlRenderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC,
+            outlineRect.w, outlineRect.h);
+        if (!entry->texture || SDL_UpdateTexture(entry->texture, nullptr, outlinePixels.data(), outlineRect.w * 4) != 0) {
+            gGpuCompositionUnsupported = true;
+            return;
+        }
+        SDL_SetTextureBlendMode(entry->texture, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(entry->texture, SDL_ScaleModeNearest);
+        gGpuCommands.push_back({ GpuCommand::Draw, outlineRect,
+            { 0, 0, outlineRect.w, outlineRect.h }, entry });
+    }
 }
 
 void hdWorldCopyIndexedChanges(const Rect& rect, const unsigned char* before)
