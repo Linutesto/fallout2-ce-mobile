@@ -789,7 +789,9 @@ void hdWorldPaletteChanged(int first, int count)
     gScrollPending = false;
     ++gGpuColorVersion;
     gpuForgetFrames();
-    gGpuCompositionUnsupported = true;
+    // The next GPU composition uses the new palette version and repaints the
+    // view. A palette change alone does not require a CPU pixel upload.
+    gGpuCompositionUnsupported = false;
     // CE: Partial updates are the cycle's unfaded palette. Full palette
     // changes are gamma/fades, applied once by the display transform.
     if (first > 0)
