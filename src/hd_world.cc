@@ -628,6 +628,12 @@ void hdWorldExit()
 
 bool hdWorldInstalled() { return gInstalled; }
 bool hdWorldActive() { return gInstalled && settings.graphics.hd_art && worldViewIsEnabled(); }
+bool hdWorldHasHdFrame(const FrmId& id, Art* art, int frame, int rotation)
+{
+    return hdWorldActive() && art != nullptr
+        && frameFor(id, frame, rotation, artGetWidth(art, frame, static_cast<Rotation>(rotation)),
+            artGetHeight(art, frame, static_cast<Rotation>(rotation))) != nullptr;
+}
 const uint32_t* hdWorldPixels() { return gPixels.empty() ? nullptr : gPixels.data(); }
 uint32_t hdWorldColorAt(int x2, int y2) { return livePixel(static_cast<size_t>(y2) * gWidth * 2 + x2); }
 void hdWorldResetCounts() { gHdCount = gFallbackCount = 0; }

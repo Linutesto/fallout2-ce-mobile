@@ -22,6 +22,7 @@ void hdWorldInit(int width, int height);
 void hdWorldExit();
 bool hdWorldInstalled();
 bool hdWorldActive();
+bool hdWorldHasHdFrame(const FrmId& id, Art* art, int frame, int rotation);
 void hdWorldSettingsChanged();
 void hdWorldSetFilter(int filter);
 void hdWorldClear(const Rect& rect);

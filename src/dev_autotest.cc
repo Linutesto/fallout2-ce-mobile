@@ -17,6 +17,7 @@
 
 #include "actions.h"
 #include "animation.h"
+#include "cycle.h"
 #include "art.h"
 #include "character_editor.h"
 #include "combat.h"
@@ -3723,6 +3724,9 @@ static void devAutotestLogGpuStats(const char* when)
 
 static void devAutotestHdMatrix()
 {
+    // Keep palette phase fixed for all later story captures in this process.
+    // The explicit cycling test below still drives the palette itself.
+    colorCycleDisable();
     devAutotestHdManifest();
     int outputWidth, outputHeight;
     SDL_GetRendererOutputSize(gSdlRenderer, &outputWidth, &outputHeight);
@@ -3798,6 +3802,35 @@ static void devAutotestHdMatrix()
     bool sameOff = off == offAgain;
     devAutotestLog("HD off round trip: indexed=%s displayed=%s; HD differs=%d\n", sameIndexed ? "PASS" : "FAIL", sameOff ? "PASS" : "FAIL", off != on);
     if (!sameIndexed || !sameOff || (hdWorldInstalled() && (hd == 0 || off == on))) exit(EXIT_FAILURE);
+    // Toggle renderers synchronously inside this one autotest action. Game
+    // ticks, animation frames and palette cycling do not advance between
+    // readbacks, so these exact comparisons are repeatable across launches.
+    std::string savedRenderer = settings.graphics.hd_renderer;
+    settings.graphics.hd_renderer = "cpu";
+    hdWorldSettingsChanged();
+    auto offCpu = devAutotestHdReadback();
+    settings.graphics.hd_renderer = "gpu";
+    hdWorldSettingsChanged();
+    auto offGpu = devAutotestHdReadback();
+    bool offModesExact = offCpu == offGpu;
+    devAutotestLog("HD off same-frame CPU/GPU: %s\n", offModesExact ? "PASS" : "FAIL");
+    if (!offModesExact) exit(EXIT_FAILURE);
+    settings.graphics.hd_art = true;
+    settings.graphics.hd_renderer = "cpu";
+    hdWorldSettingsChanged();
+    auto cpuBefore = devAutotestHdReadback();
+    settings.graphics.hd_renderer = "gpu";
+    hdWorldSettingsChanged();
+    devAutotestHdReadback();
+    settings.graphics.hd_renderer = "cpu";
+    hdWorldSettingsChanged();
+    auto cpuAfter = devAutotestHdReadback();
+    bool cpuBaselineExact = cpuBefore == cpuAfter;
+    devAutotestLog("HD CPU same-frame baseline round trip: %s\n", cpuBaselineExact ? "PASS" : "FAIL");
+    if (!cpuBaselineExact) exit(EXIT_FAILURE);
+    settings.graphics.hd_art = false;
+    settings.graphics.hd_renderer = savedRenderer;
+    hdWorldSettingsChanged();
     FILE* csv = fopen((gDevAutotestOutputPath + "/hd-benchmark.csv").c_str(), "w");
     if (!csv) exit(EXIT_FAILURE);
     fprintf(csv, "hd,iterations,median_refresh_upload_submit_ms,p95_refresh_upload_submit_ms,median_cached_submit_ms,median_draw_ms,median_present_ms,median_convert_ms,median_upload_api_ms,median_upload_submit_ms,median_lookup_ms,median_fallback_ms,median_fallback_build_ms,median_pixels_ms,median_draw_calls\n");
@@ -3991,6 +4024,149 @@ static void devAutotestHdMatrix()
     hdWorldSetGpuFastBenchmark(false);
     settings.graphics.hd_art = true;
     hdWorldSettingsChanged();
+}
+
+static void devAutotestHdCritterMatrix()
+{
+#ifndef __ANDROID__
+    if (settings.graphics.hd_renderer != "gpu" || !hdWorldActive() || gDude == nullptr) return;
+    // critters.lst entry 63 is hmwarr; ANIM_WALK resolves hmwarrab.frm.
+    const CritterFrmId fixture(static_cast<CritterFrameId>(62), ANIM_WALK);
+    CacheEntry* handle = nullptr;
+    Art* art = artLock(fixture, &handle);
+    if (art == nullptr || std::string(fixture.filePath()).find("hmwarrab") == std::string::npos) {
+        devAutotestLog("FAIL: HD critter fixture FRM %s\n", fixture.filePath());
+        exit(EXIT_FAILURE);
+    }
+    Object* actor = nullptr;
+    if (objectCreateWithFrmIdProtoId(&actor, fixture, ProtoId(0x1000000 | 67)) != 0 || actor == nullptr
+        || objectSetLocation(actor, tileGetTileInDirection(gDude->tile, ROTATION_SE, 2), gDude->elevation, nullptr) != 0) {
+        devAutotestLog("FAIL: HD critter fixture object\n");
+        exit(EXIT_FAILURE);
+    }
+    int frameCount = artGetFrameCount(art);
+    int frames[] = { 0, frameCount / 2, frameCount - 1 };
+    hdWorldSetGpuFastBenchmark(true);
+    auto verify = [&](const char* label, int direction, int frame, bool expectMask = false) {
+        uint64_t reuseBefore = hdWorldSceneReuseCount();
+        bool checkKinds = expectMask || strcmp(label, "outline") == 0
+            || strcmp(label, "tint") == 0 || strcmp(label, "glass") == 0;
+        if (checkKinds) hdWorldBeginDrawTiming();
+        tileWindowRefresh();
+        if (checkKinds) {
+            double lookup, fallback, build, pixels;
+            uint64_t calls, lightMap, mask, tint, opacity, fallbackDraws, outline, indexed;
+            hdWorldEndDrawTiming(&lookup, &fallback, &build, &pixels, &calls);
+            hdWorldLastDrawKinds(&lightMap, &mask, &tint, &opacity, &fallbackDraws, &outline, &indexed);
+            devAutotestLog("HD critter %s kinds mask=%llu tint=%llu outline=%llu\n", label,
+                static_cast<unsigned long long>(mask), static_cast<unsigned long long>(tint),
+                static_cast<unsigned long long>(outline));
+            if ((expectMask && mask == 0)
+                || ((strcmp(label, "tint") == 0 || strcmp(label, "glass") == 0) && tint == 0)
+                || (strcmp(label, "outline") == 0 && outline == 0)) exit(EXIT_FAILURE);
+        }
+        worldViewRender(gSdlRenderer);
+        SDL_RenderFlush(gSdlRenderer);
+        bool fresh = hdWorldSceneReuseCount() == reuseBefore;
+        hdWorldEnsureCpuReference();
+        size_t changed = 0, outside = 0;
+        bool readback = hdWorldVerifyTextureExact(gSdlRenderer, &changed, &outside);
+        devAutotestLog("HD critter %s direction=%d frame=%d fresh=%d readback=%d changed=%zu outside=%zu\n",
+            label, direction, frame, fresh, readback, changed, outside);
+        if (!fresh || !readback || outside != 0) exit(EXIT_FAILURE);
+    };
+    for (int direction = 0; direction < ROTATION_COUNT; direction++) {
+        for (int frame : frames) {
+            actor->rotation = static_cast<Rotation>(direction);
+            actor->frame = frame;
+            int dx = 0, dy = 0;
+            artGetFrameOffsets(art, frame, actor->rotation, &dx, &dy);
+            actor->x = dx;
+            actor->y = dy;
+            if (!hdWorldHasHdFrame(FrmId(actor), art, frame, direction)) {
+                devAutotestLog("FAIL: missing 2x HD critter %s direction=%d frame=%d\n",
+                    FrmId(actor).filePath(), direction, frame);
+                exit(EXIT_FAILURE);
+            }
+            verify("walk", direction, frame);
+        }
+    }
+    actor->outline = OUTLINE_TYPE_HOSTILE;
+    verify("outline", actor->rotation, actor->frame);
+    actor->flags = static_cast<ObjectFlags>(actor->flags | OBJECT_TRANS_RED);
+    verify("tint", actor->rotation, actor->frame);
+    actor->flags = static_cast<ObjectFlags>((actor->flags & ~OBJECT_FLAG_0xFC000) | OBJECT_TRANS_GLASS);
+    verify("glass", actor->rotation, actor->frame);
+    actor->flags = static_cast<ObjectFlags>(actor->flags & ~OBJECT_FLAG_0xFC000);
+    _obj_toggle_flat(actor, nullptr);
+    verify("flat", actor->rotation, actor->frame);
+    _obj_toggle_flat(actor, nullptr);
+    actor->x = actor->y = 0;
+    Rect view;
+    worldViewGetVisibleRect(&view);
+    int originalTile = actor->tile;
+    int wallTile = -1, bestWallOverlap = 0;
+    for (Object* wall = objectFindFirstAtElevation(gElevation); wall; wall = objectFindNextAtElevation()) {
+        if (FrmId(wall).objectType() != OBJ_TYPE_WALL) continue;
+        Rect wallRect;
+        objectGetRect(wall, &wallRect);
+        Rect clipped;
+        if (rectIntersection(&wallRect, &view, &clipped) != 0) continue;
+        for (int direction = 0; direction <= ROTATION_COUNT; direction++) {
+            int candidate = direction == ROTATION_COUNT ? wall->tile
+                : tileGetTileInDirection(wall->tile, static_cast<Rotation>(direction), 1);
+            if (!hexGridTileIsValid(candidate)) continue;
+            actor->tile = candidate;
+            Rect actorRect, overlap;
+            objectGetRect(actor, &actorRect);
+            if (rectIntersection(&actorRect, &wallRect, &overlap) == 0) {
+                int area = rectGetWidth(&overlap) * rectGetHeight(&overlap);
+                if (area > bestWallOverlap) { bestWallOverlap = area; wallTile = candidate; }
+            }
+        }
+    }
+    actor->tile = originalTile;
+    if (wallTile >= 0) {
+        objectSetLocation(actor, wallTile, gElevation, nullptr);
+        devAutotestLog("HD critter wall overlap=%d tile=%d\n", bestWallOverlap, wallTile);
+        verify("wall_occlusion", actor->rotation, actor->frame);
+    } else if (gDevAutotestSteps == kDevAutotestHdSteps) {
+        devAutotestLog("FAIL: HD critter wall overlap unavailable\n");
+        exit(EXIT_FAILURE);
+    }
+    int roofTile = -1;
+    for (int square = 0; square < SQUARE_GRID_SIZE && roofTile < 0; square++) {
+        RoofTileFrmId roof(_square[gElevation]->tileFid[square]);
+        if (roof.frameId<TileFrameId>() == TileFrameId::Invalid
+            || roof.frameId<TileFrameId>() == TileFrameId::Reserved) continue;
+        int sx, sy;
+        squareTileToScreenXY(square, &sx, &sy, gElevation);
+        if (sx < view.left || sy < view.top || sx + 80 > view.right || sy + 36 > view.bottom) continue;
+        int candidate = tileFromScreenXY(sx + 40, sy + 18);
+        if (hexGridTileIsValid(candidate)) roofTile = candidate;
+    }
+    if (roofTile >= 0 && gEgg != nullptr) {
+        int eggTile = gEgg->tile, eggElevation = gEgg->elevation;
+        objectSetLocation(actor, roofTile, gElevation, nullptr);
+        objectSetLocation(gEgg, roofTile, gElevation, nullptr);
+        devAutotestLog("HD critter roof cutout tile=%d\n", roofTile);
+        // The cave map keeps its roof hidden; Arroyo exercises the actual
+        // cut-out mask while both maps still compare the resulting pixels.
+        verify("roof_cutout", actor->rotation, actor->frame,
+            gDevAutotestSteps == kDevAutotestHdSteps);
+        objectSetLocation(gEgg, eggTile, eggElevation, nullptr);
+    } else if (gDevAutotestSteps == kDevAutotestHdSteps) {
+        devAutotestLog("FAIL: HD critter roof cutout unavailable\n");
+        exit(EXIT_FAILURE);
+    }
+    artUnlock(handle);
+    objectDestroy(actor, nullptr);
+    tileWindowRefresh();
+    worldViewRender(gSdlRenderer);
+    SDL_RenderFlush(gSdlRenderer);
+    hdWorldEnsureCpuReference();
+    hdWorldSetGpuFastBenchmark(false);
+#endif
 }
 
 static void devAutotestHdGameplay()
@@ -4305,6 +4481,7 @@ void devAutotestTick()
         }
         case DEV_AUTOTEST_ACTION_HD_MATRIX:
             devAutotestHdMatrix();
+            devAutotestHdCritterMatrix();
             break;
         case DEV_AUTOTEST_ACTION_HD_CHECK_DOOR: {
             Object* door = devAutotestFindNearestDoor();
