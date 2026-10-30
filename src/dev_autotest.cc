@@ -7111,6 +7111,11 @@ void devAutotestTick()
 
     if (gDevAutotestDelay > 0) {
         gDevAutotestDelay--;
+#ifndef __ANDROID__
+        if (settings.graphics.hd_renderer == "gpu" && gDevAutotestSteps == kDevAutotestHdSteps
+            && step->action == DEV_AUTOTEST_ACTION_WALK && gDevAutotestDelay % 15 == 0)
+            gDevAutotestPendingCapture = "hd02_walk_live";
+#endif
         return;
     }
 
@@ -7148,13 +7153,14 @@ void devAutotestCapture(SDL_Renderer* renderer)
     // The story autotest keeps the CPU world buffer current in GPU mode, so
     // compare the same frame before moving to the next scripted action.
     if (settings.graphics.hd_renderer == "gpu" && hdWorldActive()
-        && (strcmp(name, "hd02_walk") == 0 || strcmp(name, "hd05_highlight") == 0
+        && (strcmp(name, "hd02_walk") == 0 || strcmp(name, "hd02_walk_live") == 0 || strcmp(name, "hd05_highlight") == 0
             || strcmp(name, "hd06_combat") == 0)) {
         size_t changed = 0, outside = 0;
         bool readback = hdWorldVerifyTextureExact(renderer, &changed, &outside);
         devAutotestLog("HD actor %s texture vs CPU: readback=%d differing_pixels=%zu out_of_tolerance=%zu\n",
             name, readback, changed, outside);
         if (!readback || outside != 0) exit(EXIT_FAILURE);
+        if (strcmp(name, "hd02_walk_live") == 0) return;
     }
 #endif
 
