@@ -33,6 +33,7 @@ uint64_t hdWorldSceneReuseCount();
 void hdWorldScrolled(int dx, int dy);
 void hdWorldPaletteChanged(int first, int count);
 void hdWorldGrayscale();
+void hdWorldColorInvalidationStats(uint64_t* fullPalette, uint64_t* cyclePalette, uint64_t* grayscale);
 void hdWorldDraw(const FrmId& id, Art* art, int frame, int rotation,
     int x, int y, const Rect& clip, int light, const HdDrawOptions& options = { });
 void hdWorldOutline(const FrmId& id, Art* art, int frame, int rotation,

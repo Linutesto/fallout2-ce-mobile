@@ -116,6 +116,7 @@ namespace {
     bool gGpuFrameSkippedCpu = false;
     uint64_t gGpuReplayFrames = 0, gGpuReplayPixels = 0, gGpuReplayCommands = 0;
     uint64_t gGpuCpuFillFrames = 0, gGpuMissFrames = 0, gGpuUnsupportedFrames = 0;
+    uint64_t gFullPaletteChanges = 0, gCyclePaletteChanges = 0, gGrayscaleRequests = 0;
     uint64_t gFrameReplayPixels = 0, gFrameReplayCommands = 0;
     double gLastReplayMs = 0.0;
     // Bumped whenever the world texture changes outside a command replay, so
@@ -701,6 +702,14 @@ void hdWorldGpuStatsReset()
 {
     gGpuReplayFrames = gGpuReplayPixels = gGpuReplayCommands = 0;
     gGpuCpuFillFrames = gGpuMissFrames = gGpuUnsupportedFrames = 0;
+    gFullPaletteChanges = gCyclePaletteChanges = gGrayscaleRequests = 0;
+}
+
+void hdWorldColorInvalidationStats(uint64_t* fullPalette, uint64_t* cyclePalette, uint64_t* grayscale)
+{
+    *fullPalette = gFullPaletteChanges;
+    *cyclePalette = gCyclePaletteChanges;
+    *grayscale = gGrayscaleRequests;
 }
 
 void hdWorldEnsureCpuReference()
@@ -830,6 +839,8 @@ void hdWorldScrolled(int dx, int dy)
 void hdWorldPaletteChanged(int first, int count)
 {
     if (!hdWorldActive()) return;
+    if (first == 0) ++gFullPaletteChanges;
+    else ++gCyclePaletteChanges;
     ++gRevision;
     gDirtyAll = true;
     gScrollPending = false;
@@ -847,6 +858,7 @@ void hdWorldPaletteChanged(int first, int count)
 void hdWorldGrayscale()
 {
     if (hdWorldActive()) {
+        ++gGrayscaleRequests;
         gCachedCommands.clear();
         gCachedSceneSignature = gPendingSceneSignature = 0;
         gGrayscale = true;

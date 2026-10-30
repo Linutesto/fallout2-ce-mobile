@@ -3720,6 +3720,11 @@ static void devAutotestLogGpuStats(const char* when)
         static_cast<unsigned long long>(replayCommands), static_cast<unsigned long long>(cpuFill),
         static_cast<unsigned long long>(miss), static_cast<unsigned long long>(textures),
         bytes / (1024.0 * 1024.0));
+    uint64_t fullPalette, cyclePalette, grayscale;
+    hdWorldColorInvalidationStats(&fullPalette, &cyclePalette, &grayscale);
+    devAutotestLog("HD color invalidation %s full_palette=%llu cycle_palette=%llu grayscale=%llu cpu_fill_frames=%llu\n",
+        when, static_cast<unsigned long long>(fullPalette), static_cast<unsigned long long>(cyclePalette),
+        static_cast<unsigned long long>(grayscale), static_cast<unsigned long long>(cpuFill));
 }
 
 static void devAutotestHdMatrix()
@@ -4019,6 +4024,7 @@ static void devAutotestHdMatrix()
             checkChangedScene("roof_restore");
             hdWorldPaletteChanged(229, 1);
             checkChangedScene("palette");
+            devAutotestLogGpuStats("scene_mutations");
         }
     }
     hdWorldSetGpuFastBenchmark(false);
@@ -4356,6 +4362,7 @@ void devAutotestTick()
     if (gDevAutotestStep >= gDevAutotestStepCount) {
         if (gDevAutotestSteps == kDevAutotestHdSteps || gDevAutotestSteps == kDevAutotestHdDarkSteps)
             devAutotestHdGameplay();
+        if (settings.graphics.hd_renderer == "gpu") devAutotestLogGpuStats("scenario_end");
         devAutotestLog("autotest finished\n");
         exit(EXIT_SUCCESS);
     }
