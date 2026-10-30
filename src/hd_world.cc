@@ -545,7 +545,11 @@ namespace {
             } else {
                 uint32_t color = command.kind == GpuCommand::Clear ? screenTransformWorldColor(0xFF000000) : command.color;
                 SDL_SetRenderDrawColor(renderer, (color >> 16) & 255, (color >> 8) & 255, color & 255, 255);
-                ok = SDL_RenderFillRect(renderer, &target) == 0;
+                if (command.kind == GpuCommand::Clear && target.x == 0 && target.y == 0
+                    && target.w == source.w * 2 && target.h == source.h * 2)
+                    ok = SDL_RenderClear(renderer) == 0;
+                else
+                    ok = SDL_RenderFillRect(renderer, &target) == 0;
             }
             if (!ok) break;
             ++gFrameReplayCommands;
