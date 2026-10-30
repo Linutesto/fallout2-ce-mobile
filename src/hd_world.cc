@@ -1356,7 +1356,9 @@ bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FR
         Uint64 composeStart = SDL_GetPerformanceCounter();
         if (gpuReplayCommands(renderer, source)) {
             gpuComposeMs = elapsedMs(composeStart, SDL_GetPerformanceCounter());
-            gpuFull = gDirtyAll;
+            // A full clear makes this a reusable complete command list even
+            // when the CPU dirty flag was never set by tileWindowRefresh().
+            gpuFull = gDirtyAll || fullClearCovers();
             replayed = true;
             ++gGpuReplayFrames;
             gGpuReplayPixels += gFrameReplayPixels;
@@ -1409,7 +1411,9 @@ bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FR
             shiftCopied, reusedTexture, replayed, skipReplay, updates.size(),
             gGpuCompositionUnsupported, gDirtyAll);
     if (replayed && gpuFull && gPendingSceneSignature != 0 && !gGpuCompositionUnsupported) {
-        gCachedCommands = gGpuCommands;
+        // The just-recorded list is complete. Keep its storage instead of
+        // copying every draw and incrementing every texture reference.
+        gCachedCommands.swap(gGpuCommands);
         gCachedSceneSignature = gPendingSceneSignature;
     }
     gGpuCommands.clear();

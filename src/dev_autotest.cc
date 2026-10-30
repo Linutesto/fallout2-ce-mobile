@@ -3908,8 +3908,8 @@ static void devAutotestHdMatrix()
                 static_cast<unsigned long long>(indexed));
         }
         if (enabled && settings.graphics.hd_renderer == "gpu") {
-            // The same full refresh with the on-screen image invalidated
-            // every time: what a real repaint of the whole view costs.
+            // Force a complete target repaint each time with an unchanged
+            // scene, so the revision check may reuse its command list.
             std::vector<double> changed;
             std::vector<double> refreshTimes, renderTimes, flushTimes;
             std::vector<double> floorTimes, preRoofTimes, roofTimes, postRoofTimes, otherTimes;
@@ -3947,10 +3947,31 @@ static void devAutotestHdMatrix()
             devAutotestLog("HD full refresh layers floor=%.5f pre_roof=%.5f roof=%.5f post_roof=%.5f other=%.5f ms (medians)\n",
                 medianOf(floorTimes), medianOf(preRoofTimes), medianOf(roofTimes), medianOf(postRoofTimes), medianOf(otherTimes));
             std::sort(changed.begin(), changed.end());
-            devAutotestLog("HD full refresh with changes: median=%.5f p95=%.5f ms (replay included)\n",
+            devAutotestLog("HD forced full repaint unchanged: median=%.5f p95=%.5f ms (replay included)\n",
                 changed[15], changed[28]);
             devAutotestLog("HD full refresh reused command lists=%llu of 32\n",
                 static_cast<unsigned long long>(hdWorldSceneReuseCount() - reuseBefore));
+            if (gDude != nullptr) {
+                std::vector<double> moving;
+                int originalX = gDude->x;
+                reuseBefore = hdWorldSceneReuseCount();
+                for (int i = 0; i < 32; i++) {
+                    gDude->x = originalX + (i & 1);
+                    hdWorldInvalidateReplay();
+                    Uint64 start = SDL_GetPerformanceCounter();
+                    tileWindowRefresh();
+                    worldViewRender(gSdlRenderer);
+                    SDL_RenderFlush(gSdlRenderer);
+                    if (i >= 2) moving.push_back((SDL_GetPerformanceCounter() - start) * 1000.0 / SDL_GetPerformanceFrequency());
+                }
+                gDude->x = originalX;
+                tileWindowRefresh();
+                worldViewRender(gSdlRenderer);
+                SDL_RenderFlush(gSdlRenderer);
+                std::sort(moving.begin(), moving.end());
+                devAutotestLog("HD forced full repaint actor moving: median=%.5f p95=%.5f ms reused=%llu of 32\n",
+                    moving[15], moving[28], static_cast<unsigned long long>(hdWorldSceneReuseCount() - reuseBefore));
+            }
         }
     }
     fclose(csv);
