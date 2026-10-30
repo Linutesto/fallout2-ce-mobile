@@ -94,6 +94,19 @@ static TileWindowRefreshElevationProc* gTileWindowRefreshElevationProc = tileRef
 
 // 0x51D968 refresh_enabled
 static bool gTileEnabled = true;
+static bool gTileRefreshProfileEnabled = false;
+static double gTileRefreshProfile[5] = {};
+
+void tileSetRefreshProfileEnabled(bool enabled) { gTileRefreshProfileEnabled = enabled; }
+void tileGetRefreshProfile(double* floorMs, double* preRoofMs, double* roofMs,
+    double* postRoofMs, double* otherMs)
+{
+    *floorMs = gTileRefreshProfile[0];
+    *preRoofMs = gTileRefreshProfile[1];
+    *roofMs = gTileRefreshProfile[2];
+    *postRoofMs = gTileRefreshProfile[3];
+    *otherMs = gTileRefreshProfile[4];
+}
 
 // 0x51D96C off_tile
 const int _off_tile[ROTATION_COUNT] = {
@@ -285,6 +298,42 @@ static int gTileWindowPitch;
 
 // 0x66BE2C square_width
 static int gSquareGridWidth;
+static TileMapperOverlayProc* gTileMapperOverlayProc = nullptr;
+
+static uint64_t tileSceneSignature(int elevation)
+{
+    if (!elevationIsValid(elevation) || !gTileSquares || !gTileSquares[elevation]
+        || gTileMapperOverlayProc != nullptr) return 0;
+    uint64_t hash = 1469598103934665603ull;
+    auto fold = [&](uint64_t value) { hash = (hash ^ value) * 1099511628211ull; };
+    fold(elevation); fold(gCenterTile); fold(gTileRoofIsVisible);
+    fold(settings.graphics.dark_boost);
+    for (int type = OBJ_TYPE_FIRST; type < OBJ_TYPE_COUNT; type++)
+        fold(artIsObjectTypeHidden(static_cast<ObjectType>(type)));
+    Rect visible;
+    worldViewGetVisibleRect(&visible);
+    fold(visible.left); fold(visible.top); fold(visible.right); fold(visible.bottom);
+    fold(gSquareGridWidth); fold(gSquareGridHeight);
+    for (int i = 0; i < gSquareGridWidth * gSquareGridHeight; i++)
+        fold(gTileSquares[elevation]->tileFid[i]);
+    fold(mapEdgeIsEnabled());
+    if (mapEdgeIsEnabled()) {
+        const EdgeElevationData& edge = mapEdgeGetElevationData(elevation);
+        fold(edge.squareRect.left); fold(edge.squareRect.top);
+        fold(edge.squareRect.right); fold(edge.squareRect.bottom);
+        fold(edge.clipSides.left); fold(edge.clipSides.top);
+        fold(edge.clipSides.right); fold(edge.clipSides.bottom);
+        for (const EdgeZone& zone : edge.zones) {
+            fold(zone.tileRect.left); fold(zone.tileRect.top);
+            fold(zone.tileRect.right); fold(zone.tileRect.bottom);
+            fold(zone.pixelRect.left); fold(zone.pixelRect.top);
+            fold(zone.pixelRect.right); fold(zone.pixelRect.bottom);
+        }
+    }
+    fold(objectSceneSignature());
+    fold(lightSceneRevision());
+    return hash;
+}
 
 // 0x66BE30 buf_width_2
 static int gTileWindowWidth;
@@ -293,7 +342,6 @@ static int gTileWindowWidth;
 int gCenterTile;
 
 // Optional mapper overlay drawn over the iso view each refresh (edge editor). Null when unused.
-static TileMapperOverlayProc* gTileMapperOverlayProc = nullptr;
 
 void tileSetMapperOverlayProc(TileMapperOverlayProc* proc)
 {
@@ -829,6 +877,7 @@ static void tileRefreshMapper(Rect* rect, int elevation)
 // 0x4B15E8 refresh_game
 static void tileRefreshGame(Rect* rect, int elevation)
 {
+    Uint64 profileStart = gTileRefreshProfileEnabled ? SDL_GetPerformanceCounter() : 0;
     Rect rectToUpdate;
 
     if (rectIntersection(rect, &gTileWindowRect, &rectToUpdate) == -1) {
@@ -837,6 +886,15 @@ static void tileRefreshGame(Rect* rect, int elevation)
 
     // CE: Only what's in view is drawn (see world_view.h).
     if (!worldViewClipRender(&rectToUpdate)) {
+        return;
+    }
+
+    if (hdWorldActive() && settings.graphics.hd_renderer == "gpu"
+        && rect->left == gTileWindowRect.left && rect->top == gTileWindowRect.top
+        && rect->right == gTileWindowRect.right && rect->bottom == gTileWindowRect.bottom
+        && hdWorldTryReuseCommands(rectToUpdate, elevation, tileSceneSignature(elevation))) {
+        gTileWindowRefreshProc(&rectToUpdate);
+        worldViewRendered(&rectToUpdate);
         return;
     }
 
@@ -869,10 +927,15 @@ static void tileRefreshGame(Rect* rect, int elevation)
         return;
     }
 
+    Uint64 phase = gTileRefreshProfileEnabled ? SDL_GetPerformanceCounter() : 0;
     tileRenderFloorsInRect(&renderRect, elevation);
+    Uint64 floorDone = gTileRefreshProfileEnabled ? SDL_GetPerformanceCounter() : 0;
     _obj_render_pre_roof(&renderRect, elevation);
+    Uint64 preDone = gTileRefreshProfileEnabled ? SDL_GetPerformanceCounter() : 0;
     tileRenderRoofsInRect(&renderRect, elevation);
+    Uint64 roofDone = gTileRefreshProfileEnabled ? SDL_GetPerformanceCounter() : 0;
     _obj_render_post_roof(&renderRect, elevation);
+    Uint64 postDone = gTileRefreshProfileEnabled ? SDL_GetPerformanceCounter() : 0;
 
     if (!hasVisArea) {
         tileRenderStencil(&renderRect);
@@ -880,6 +943,14 @@ static void tileRefreshGame(Rect* rect, int elevation)
 
     gTileWindowRefreshProc(didClear ? &rectToUpdate : &renderRect);
     worldViewRendered(&rectToUpdate);
+    if (gTileRefreshProfileEnabled) {
+        double scale = 1000.0 / SDL_GetPerformanceFrequency();
+        gTileRefreshProfile[0] = (floorDone - phase) * scale;
+        gTileRefreshProfile[1] = (preDone - floorDone) * scale;
+        gTileRefreshProfile[2] = (roofDone - preDone) * scale;
+        gTileRefreshProfile[3] = (postDone - roofDone) * scale;
+        gTileRefreshProfile[4] = ((phase - profileStart) + (SDL_GetPerformanceCounter() - postDone)) * scale;
+    }
 }
 
 // 0x4B1634 tile_toggle_roof

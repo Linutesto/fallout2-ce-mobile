@@ -2,6 +2,7 @@
 #define OBJECT_H
 
 #include <vector>
+#include <cstdint>
 
 #include "art.h"
 #include "color.h"
@@ -34,6 +35,7 @@ int objectLoadAll(File* stream);
 int objectSaveAll(File* stream);
 void _obj_render_pre_roof(Rect* rect, int elevation);
 void _obj_render_post_roof(Rect* rect, int elevation);
+uint64_t objectSceneSignature();
 int objectCreateWithFrmIdProtoId(Object** objectPtr, const FrmId& frmId, const ProtoId& protoId);
 int objectCreateWithProtoId(Object** objectPtr, const ProtoId& protoId);
 int _obj_copy(Object** a1, Object* a2);

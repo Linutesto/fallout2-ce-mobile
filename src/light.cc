@@ -13,6 +13,8 @@ namespace fallout {
 
 // 0x51923C ambient_light
 static int gAmbientIntensity = LIGHT_INTENSITY_MAX;
+static uint64_t gLightSceneRevision = 1;
+uint64_t lightSceneRevision() { return gLightSceneRevision; }
 
 // light intensity per elevation per tile
 // 0x59E994 tile_intensity
@@ -72,6 +74,7 @@ void lightSetAmbientIntensity(int intensity, bool shouldUpdateScreen)
 
     int oldAmbientIntensity = gAmbientIntensity;
     gAmbientIntensity = normalizedIntensity;
+    if (oldAmbientIntensity != normalizedIntensity) ++gLightSceneRevision;
     lightUpdateShadowLift();
 
     if (shouldUpdateScreen) {
@@ -121,6 +124,7 @@ void lightSetTileIntensity(int elevation, int tile, int intensity)
     }
 
     gTileIntensity[elevation][tile] = intensity;
+    ++gLightSceneRevision;
 }
 
 // 0x47AA10 light_add_to_tile
@@ -135,6 +139,7 @@ void lightIncreaseTileIntensity(int elevation, int tile, int intensity)
     }
 
     gTileIntensity[elevation][tile] += intensity;
+    ++gLightSceneRevision;
 }
 
 // 0x47AA48 light_subtract_from_tile
@@ -149,11 +154,13 @@ void lightDecreaseTileIntensity(int elevation, int tile, int intensity)
     }
 
     gTileIntensity[elevation][tile] -= intensity;
+    ++gLightSceneRevision;
 }
 
 // 0x47AA84 light_reset_tiles
 void lightResetTileIntensity()
 {
+    ++gLightSceneRevision;
     for (int elevation = 0; elevation < ELEVATION_COUNT; elevation++) {
         for (int tile = 0; tile < HEX_GRID_SIZE; tile++) {
             gTileIntensity[elevation][tile] = 655;

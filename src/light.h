@@ -1,5 +1,6 @@
 #ifndef LIGHT_H
 #define LIGHT_H
+#include <cstdint>
 
 namespace fallout {
 
@@ -15,6 +16,7 @@ int lightGetAmbientIntensity();
 // Ambient light the map is drawn with: the real one raised by the dark boost
 // setting.
 int lightGetDrawnAmbientIntensity();
+uint64_t lightSceneRevision();
 // The dark boost setting changed: redraws the map with it.
 void lightApplyDarkBoost();
 void lightSetAmbientIntensity(int intensity, bool shouldUpdateScreen);

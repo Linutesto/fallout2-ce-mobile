@@ -25,6 +25,10 @@ bool hdWorldActive();
 void hdWorldSettingsChanged();
 void hdWorldSetFilter(int filter);
 void hdWorldClear(const Rect& rect);
+// Returns true only for a complete refresh whose rendered scene signature is
+// identical to the last command list. The caller may skip scene traversal.
+bool hdWorldTryReuseCommands(const Rect& rect, int elevation, uint64_t sceneSignature);
+uint64_t hdWorldSceneReuseCount();
 void hdWorldScrolled(int dx, int dy);
 void hdWorldPaletteChanged(int first, int count);
 void hdWorldGrayscale();

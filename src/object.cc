@@ -299,6 +299,37 @@ static Rect gObjectsUpdateAreaPixelBounds;
 // 0x639DA0 objectTable
 static ObjectListNode* gObjectListHeadByTile[HEX_GRID_SIZE];
 
+uint64_t objectSceneSignature()
+{
+    // Hash the rendered list itself. This catches direct script writes to
+    // frames, flags, outlines, position or inventory as well as API mutations.
+    uint64_t hash = 1469598103934665603ull;
+    auto fold = [&](uint64_t value) { hash = (hash ^ value) * 1099511628211ull; };
+    fold(gObjectsSeeThrough);
+    fold(reinterpret_cast<uintptr_t>(gEgg));
+    fold(reinterpret_cast<uintptr_t>(gObjectTargetOutline));
+    auto foldObject = [&](const Object* obj) {
+        fold(reinterpret_cast<uintptr_t>(obj));
+        fold(obj->id);
+        fold(obj->tile); fold(obj->x); fold(obj->y);
+        if (obj->tile == -1) { fold(obj->sx); fold(obj->sy); }
+        fold(obj->frame); fold(obj->rotation); fold(obj->fid);
+        fold(obj->flags); fold(obj->elevation); fold(obj->pid);
+        fold(obj->lightDistance); fold(obj->lightIntensity); fold(obj->outline);
+        const unsigned char* bytes = reinterpret_cast<const unsigned char*>(&obj->data);
+        for (size_t i = 0; i < sizeof(obj->data); i++) fold(bytes[i]);
+    };
+    for (ObjectListNode* node = gObjectListHead; node; node = node->next)
+        foldObject(node->obj);
+    for (int tile = 0; tile < HEX_GRID_SIZE; tile++) {
+        for (ObjectListNode* node = gObjectListHeadByTile[tile]; node; node = node->next) {
+            fold(tile);
+            foldObject(node->obj);
+        }
+    }
+    return hash;
+}
+
 // 0x660EA0 glassGrayTable
 static Color _glassGrayTable[COLOR_COUNT];
 

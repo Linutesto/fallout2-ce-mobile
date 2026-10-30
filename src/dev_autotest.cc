@@ -3874,11 +3874,16 @@ static void devAutotestHdMatrix()
             // every time: what a real repaint of the whole view costs.
             std::vector<double> changed;
             std::vector<double> refreshTimes, renderTimes, flushTimes;
+            std::vector<double> floorTimes, preRoofTimes, roofTimes, postRoofTimes, otherTimes;
+            uint64_t reuseBefore = hdWorldSceneReuseCount();
+            tileSetRefreshProfileEnabled(true);
             for (int i = 0; i < 32; i++) {
                 hdWorldInvalidateReplay();
                 Uint64 started = SDL_GetPerformanceCounter();
                 tileWindowRefresh();
                 Uint64 refreshed = SDL_GetPerformanceCounter();
+                double floorMs, preRoofMs, roofMs, postRoofMs, otherMs;
+                tileGetRefreshProfile(&floorMs, &preRoofMs, &roofMs, &postRoofMs, &otherMs);
                 worldViewRender(gSdlRenderer);
                 Uint64 rendered = SDL_GetPerformanceCounter();
                 SDL_RenderFlush(gSdlRenderer);
@@ -3887,17 +3892,27 @@ static void devAutotestHdMatrix()
                     refreshTimes.push_back((refreshed - started) * 1000.0 / SDL_GetPerformanceFrequency());
                     renderTimes.push_back((rendered - refreshed) * 1000.0 / SDL_GetPerformanceFrequency());
                     flushTimes.push_back((SDL_GetPerformanceCounter() - rendered) * 1000.0 / SDL_GetPerformanceFrequency());
+                    floorTimes.push_back(floorMs);
+                    preRoofTimes.push_back(preRoofMs);
+                    roofTimes.push_back(roofMs);
+                    postRoofTimes.push_back(postRoofMs);
+                    otherTimes.push_back(otherMs);
                 }
             }
+            tileSetRefreshProfileEnabled(false);
             auto medianOf = [](std::vector<double>& v) {
                 std::sort(v.begin(), v.end());
                 return v[v.size() / 2];
             };
             devAutotestLog("HD full refresh split refresh=%.5f render=%.5f flush=%.5f ms (medians)\n",
                 medianOf(refreshTimes), medianOf(renderTimes), medianOf(flushTimes));
+            devAutotestLog("HD full refresh layers floor=%.5f pre_roof=%.5f roof=%.5f post_roof=%.5f other=%.5f ms (medians)\n",
+                medianOf(floorTimes), medianOf(preRoofTimes), medianOf(roofTimes), medianOf(postRoofTimes), medianOf(otherTimes));
             std::sort(changed.begin(), changed.end());
             devAutotestLog("HD full refresh with changes: median=%.5f p95=%.5f ms (replay included)\n",
                 changed[15], changed[28]);
+            devAutotestLog("HD full refresh reused command lists=%llu of 32\n",
+                static_cast<unsigned long long>(hdWorldSceneReuseCount() - reuseBefore));
         }
     }
     fclose(csv);
@@ -3911,6 +3926,67 @@ static void devAutotestHdMatrix()
             readback, changed, outside);
         if (!readback || outside != 0) exit(EXIT_FAILURE);
         devAutotestLogGpuStats("full_refresh");
+        // Mutate visual inputs directly, including a field scripts can write
+        // without an object setter. A stale cached command list must never be
+        // reused, and the resulting GPU image must still match the CPU scene.
+        if (gDude != nullptr) {
+            auto checkChangedScene = [&](const char* label) {
+                uint64_t before = hdWorldSceneReuseCount();
+                hdWorldInvalidateReplay();
+                tileWindowRefresh();
+                worldViewRender(gSdlRenderer);
+                SDL_RenderFlush(gSdlRenderer);
+                bool missed = hdWorldSceneReuseCount() == before;
+                hdWorldEnsureCpuReference();
+                size_t different = 0, outsideTolerance = 0;
+                bool exact = hdWorldVerifyTextureExact(gSdlRenderer, &different, &outsideTolerance);
+                devAutotestLog("HD scene revision %s: cache_miss=%d readback=%d outside=%zu\n",
+                    label, missed, exact, outsideTolerance);
+                if (!missed || !exact || outsideTolerance != 0) exit(EXIT_FAILURE);
+            };
+            Rotation oldRotation = gDude->rotation;
+            gDude->rotation = static_cast<Rotation>((oldRotation + 1) % ROTATION_COUNT);
+            checkChangedScene("actor_rotation");
+            gDude->rotation = oldRotation;
+            checkChangedScene("actor_rotation_restore");
+            Object* actor = devAutotestFindNearestCritter();
+            if (actor != nullptr) {
+                CacheEntry* artHandle = nullptr;
+                Art* actorArt = artLock(FrmId(actor), &artHandle);
+                int frameCount = actorArt != nullptr ? artGetFrameCount(actorArt) : 0;
+                if (actorArt != nullptr) artUnlock(artHandle);
+                if (frameCount > 1) {
+                    int oldFrame = actor->frame;
+                    actor->frame = (oldFrame + 1) % frameCount;
+                    checkChangedScene("actor_frame");
+                    actor->frame = oldFrame;
+                    checkChangedScene("actor_frame_restore");
+                } else {
+                    devAutotestLog("HD scene revision actor_frame: no multi-frame actor in scene\n");
+                }
+            }
+            Object* marker = nullptr;
+            if (objectCreateWithProtoId(&marker, ProtoId(ItemProtoTypeId::Dynamite)) == 0) {
+                objectSetLocation(marker, gDude->tile, gDude->elevation, nullptr);
+                checkChangedScene("object_add");
+                objectDestroy(marker, nullptr);
+                checkChangedScene("object_remove");
+            } else {
+                devAutotestLog("FAIL: scene revision object create\n");
+                exit(EXIT_FAILURE);
+            }
+            int oldLight = lightGetTrueTileIntensity(gDude->elevation, gDude->tile);
+            lightSetTileIntensity(gDude->elevation, gDude->tile, oldLight + 1);
+            checkChangedScene("light");
+            lightSetTileIntensity(gDude->elevation, gDude->tile, oldLight);
+            checkChangedScene("light_restore");
+            tile_toggle_roof(false);
+            checkChangedScene("roof");
+            tile_toggle_roof(false);
+            checkChangedScene("roof_restore");
+            hdWorldPaletteChanged(229, 1);
+            checkChangedScene("palette");
+        }
     }
     hdWorldSetGpuFastBenchmark(false);
     settings.graphics.hd_art = true;

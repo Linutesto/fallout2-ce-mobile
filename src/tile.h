@@ -46,6 +46,10 @@ void tileWindowRefreshRect(Rect* rect, int elevation);
 void tileBeginDeferredRefresh();
 void tileEndDeferredRefresh();
 void tileWindowRefresh();
+// Timed autotest only: last full game refresh, split by world layer.
+void tileSetRefreshProfileEnabled(bool enabled);
+void tileGetRefreshProfile(double* floorMs, double* preRoofMs, double* roofMs,
+    double* postRoofMs, double* otherMs);
 int tileSetCenter(int tile, int flags);
 void tile_toggle_roof(bool refresh);
 int tileRoofIsVisible();

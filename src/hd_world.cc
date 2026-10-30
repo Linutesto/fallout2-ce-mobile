@@ -93,6 +93,12 @@ namespace {
         uint32_t color = 0;
     };
     std::vector<GpuCommand> gGpuCommands;
+    std::vector<GpuCommand> gCachedCommands;
+    uint64_t gCachedSceneSignature = 0;
+    uint64_t gPendingSceneSignature = 0;
+    Rect gCachedSceneRect = { 0, 0, -1, -1 };
+    int gCachedElevation = -1;
+    uint64_t gSceneReuseCount = 0;
     std::list<std::string> gGpuLru;
     struct GpuCacheEntry {
         std::shared_ptr<GpuFrameTexture> art;
@@ -137,6 +143,8 @@ namespace {
     void gpuForgetFrames()
     {
         gGpuCommands.clear();
+        gCachedCommands.clear();
+        gCachedSceneSignature = gPendingSceneSignature = 0;
         gGpuFrames.clear();
         gGpuLru.clear();
         gGpuAtlasPages.clear();
@@ -659,6 +667,28 @@ void hdWorldLastDrawKinds(uint64_t* lightMap, uint64_t* mask, uint64_t* tint, ui
 
 void hdWorldSetGpuFastBenchmark(bool enabled) { gGpuTimedFast = enabled; }
 
+bool hdWorldTryReuseCommands(const Rect& rect, int elevation, uint64_t sceneSignature)
+{
+    if (!gpuCompositionRequested() || sceneSignature == 0) return false;
+    gPendingSceneSignature = sceneSignature;
+    bool sameRect = rect.left == gCachedSceneRect.left && rect.top == gCachedSceneRect.top
+        && rect.right == gCachedSceneRect.right && rect.bottom == gCachedSceneRect.bottom;
+    if (gCachedSceneSignature == sceneSignature && gCachedElevation == elevation
+        && sameRect && !gCachedCommands.empty() && !gGrayscale && gGpuCommands.empty()) {
+        gGpuCommands = gCachedCommands;
+        gDirtyAll = true;
+        ++gRevision;
+        ++gSceneReuseCount;
+        return true;
+    }
+    gCachedCommands.clear();
+    gCachedSceneSignature = 0;
+    gCachedSceneRect = rect;
+    gCachedElevation = elevation;
+    return false;
+}
+uint64_t hdWorldSceneReuseCount() { return gSceneReuseCount; }
+
 void hdWorldInvalidateReplay() { gReplayStateValid = false; }
 
 void hdWorldGpuStatsReset()
@@ -695,11 +725,17 @@ void hdWorldSetFilter(int filter)
 {
     bool changed = gFallbackFilter != filter;
     gFallbackFilter = filter;
+    if (changed) {
+        gCachedCommands.clear();
+        gCachedSceneSignature = gPendingSceneSignature = 0;
+    }
     if (changed && hdWorldActive()) tileWindowRefresh();
 }
 
 void hdWorldSettingsChanged()
 {
+    gCachedCommands.clear();
+    gCachedSceneSignature = gPendingSceneSignature = 0;
     if (hdWorldActive())
         allocatePixels();
     else {
@@ -805,6 +841,8 @@ void hdWorldPaletteChanged(int first, int count)
 void hdWorldGrayscale()
 {
     if (hdWorldActive()) {
+        gCachedCommands.clear();
+        gCachedSceneSignature = gPendingSceneSignature = 0;
         gGrayscale = true;
         ++gRevision;
         gDirtyAll = true;
@@ -1352,6 +1390,10 @@ bool hdWorldPresent(SDL_Renderer* renderer, const SDL_Rect& source, const SDL_FR
         debugPrint("HD gpu done shifted=%d copy=%d replayed=%d skip=%d updates=%zu unsup=%d full=%d\n",
             shiftCopied, reusedTexture, replayed, skipReplay, updates.size(),
             gGpuCompositionUnsupported, gDirtyAll);
+    if (replayed && gpuFull && gPendingSceneSignature != 0 && !gGpuCompositionUnsupported) {
+        gCachedCommands = gGpuCommands;
+        gCachedSceneSignature = gPendingSceneSignature;
+    }
     gGpuCommands.clear();
     gGpuCompositionUnsupported = false;
     gLastUpdateFull = gpuFull || (updates.size() == 1 && updates[0].w == w && updates[0].h == h);
