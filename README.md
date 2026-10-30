@@ -6,6 +6,23 @@ A fork of [Fallout 2: Community Engine](https://github.com/fallout2-ce/fallout2-
 
 This is an **unofficial, fan-made, modified version** of Fallout 2 CE. It is not affiliated with or endorsed by Bethesda Softworks, ZeniMax Media or Interplay. Fallout is a trademark of its owners. The app contains **no game data**: you need your own copy of Fallout 2 ([GOG](https://www.gog.com/game/fallout_2), [Steam](https://store.steampowered.com/app/38410), [Epic Games](https://store.epicgames.com/p/fallout-2)).
 
+## Wasteland Reborn
+
+This engine ships in **Wasteland Reborn** — the packaged release of
+Fallout 2 (Restoration Project + touch UI + optional AI NPCs) for Windows
+and Android. If you are here to **install and play**, you don't need to
+build anything: the guides take you through every step, one action at a
+time, quoting each button and menu as the program shows it:
+
+- [Windows install guide (English)](https://github.com/Linutesto/wasteland-reborn-installer/blob/main/docs/INSTALL-WINDOWS.md)
+- [Guide Windows (en français)](https://github.com/Linutesto/wasteland-reborn-installer/blob/main/docs/INSTALL-WINDOWS.fr.md)
+- [Troubleshooting (English)](https://github.com/Linutesto/wasteland-reborn-installer/blob/main/docs/TROUBLESHOOTING.md)
+  · [Dépannage (français)](https://github.com/Linutesto/wasteland-reborn-installer/blob/main/docs/TROUBLESHOOTING.fr.md)
+- [Linux install guide (English)](https://github.com/Linutesto/wasteland-reborn-installer/blob/main/docs/INSTALL-LINUX.md)
+
+Releases and APKs:
+[wasteland-reborn-installer](https://github.com/Linutesto/wasteland-reborn-installer/releases/latest).
+
 ## Screenshots
 
 <p><img src="docs/screenshots/combat.jpg" alt="Combat: an enemy picked, its hit chance" width="49%"> <img src="docs/screenshots/dialogue.jpg" alt="Dialogue: the drill sergeant at Navarro" width="49%"></p>
