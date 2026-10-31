@@ -1068,6 +1068,7 @@ static const DevAutotestStep kDevAutotestHdHeadsSteps[] = {
 };
 static bool gDevAutotestHdHeads = false;
 static bool gDevAutotestHdHeadsFallback = false;
+static bool gDevAutotestHdHeadsBench = false;
 bool devAutotestHdHeadsFallback() { return gDevAutotestHdHeadsFallback; }
 
 // Barter with Clint (at the new game's start) by the mobile UI's way or the
@@ -3127,11 +3128,13 @@ void devAutotestSetScenario(const char* name)
     } else if (strcmp(name, "hd-dark") == 0) {
         gDevAutotestSteps = kDevAutotestHdDarkSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestHdDarkSteps) / sizeof(kDevAutotestHdDarkSteps[0]);
-    } else if (strcmp(name, "hd-heads") == 0 || strcmp(name, "hd-heads-fallback") == 0) {
+    } else if (strcmp(name, "hd-heads") == 0 || strcmp(name, "hd-heads-fallback") == 0
+        || strcmp(name, "hd-heads-bench") == 0) {
         gDevAutotestSteps = kDevAutotestHdHeadsSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestHdHeadsSteps) / sizeof(kDevAutotestHdHeadsSteps[0]);
-        gDevAutotestHdHeads = true;
+        gDevAutotestHdHeads = strcmp(name, "hd-heads-bench") != 0;
         gDevAutotestHdHeadsFallback = strcmp(name, "hd-heads-fallback") == 0;
+        gDevAutotestHdHeadsBench = strcmp(name, "hd-heads-bench") == 0;
     } else if (strcmp(name, "graphics") == 0) {
         gDevAutotestSteps = kDevAutotestGraphicsSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestGraphicsSteps) / sizeof(kDevAutotestGraphicsSteps[0]);
@@ -7467,6 +7470,7 @@ void devAutotestCapture(SDL_Renderer* renderer)
 
     const char* name = gDevAutotestPendingCapture;
     gDevAutotestPendingCapture = nullptr;
+    if (gDevAutotestHdHeadsBench) return;
     if (strcmp(name, "heads_missing") == 0 && gameDialogHasHdHead()) {
         devAutotestLog("autotest failed: stale HD head on missing-frame fallback\n");
         exit(EXIT_FAILURE);
