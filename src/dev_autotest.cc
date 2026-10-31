@@ -1086,6 +1086,7 @@ static const DevAutotestStep kDevAutotestHdHeadsReviewSteps[] = {
 };
 static bool gDevAutotestHdHeads = false;
 static bool gDevAutotestHdUiFallback = false;
+static bool gDevAutotestHdUiBench = false;
 static std::vector<unsigned char> gDevAutotestHdUiReference;
 static bool gDevAutotestHdHeadsFallback = false;
 static bool gDevAutotestHdHeadsBench = false;
@@ -1465,6 +1466,18 @@ static void devAutotestCheckMods()
 
 // Mobile UI inventory screen: ammo into a weapon, item into a bag, armor
 // and hands, bag opened and closed, item taken out, dropping.
+static const DevAutotestStep kDevAutotestHdUiBenchSteps[] = {
+    { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 300, "uib_start" },
+    { DEV_AUTOTEST_ACTION_GIVE_ITEM, 8, 0, 0, 1, "uib_pistol" },
+    { DEV_AUTOTEST_ACTION_GIVE_ITEM, 29, 0, 0, 1, "uib_ammo" },
+    { DEV_AUTOTEST_ACTION_GIVE_ITEM, 46, 0, 0, 1, "uib_bag" },
+    { DEV_AUTOTEST_ACTION_GIVE_ITEM, 74, 0, 0, 1, "uib_jacket" },
+    { DEV_AUTOTEST_ACTION_GIVE_ITEM, 4, 0, 0, 1, "uib_knife" },
+    { DEV_AUTOTEST_ACTION_GIVE_ITEM, 40, 0, 0, 1, "uib_stimpak" },
+    { DEV_AUTOTEST_ACTION_COMMAND, static_cast<int>(GameCommandType::Inventory), 0, 0, 300, "uib_inventory" },
+    { DEV_AUTOTEST_ACTION_BACK, 0, 0, 0, 30, "uib_done" },
+};
+
 static const DevAutotestStep kDevAutotestHdUiSteps[] = {
     { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 300, "ui_start" },
     { DEV_AUTOTEST_ACTION_GIVE_ITEM, 8, 0, 0, 1, "ui_pistol" },
@@ -3169,7 +3182,11 @@ static void devAutotestPrepareSaves()
 
 void devAutotestSetScenario(const char* name)
 {
-    if (strcmp(name, "hd-ui") == 0 || strcmp(name, "hd-ui-fallback") == 0) {
+    if (strcmp(name, "hd-ui-bench") == 0) {
+        gDevAutotestSteps = kDevAutotestHdUiBenchSteps;
+        gDevAutotestStepCount = sizeof(kDevAutotestHdUiBenchSteps) / sizeof(kDevAutotestHdUiBenchSteps[0]);
+        gDevAutotestHdUiBench = true;
+    } else if (strcmp(name, "hd-ui") == 0 || strcmp(name, "hd-ui-fallback") == 0) {
         gDevAutotestSteps = kDevAutotestHdUiSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestHdUiSteps) / sizeof(kDevAutotestHdUiSteps[0]);
         gDevAutotestHdUiFallback = strcmp(name, "hd-ui-fallback") == 0;
@@ -7541,7 +7558,7 @@ void devAutotestCapture(SDL_Renderer* renderer)
 
     const char* name = gDevAutotestPendingCapture;
     gDevAutotestPendingCapture = nullptr;
-    if (gDevAutotestHdHeadsBench) return;
+    if (gDevAutotestHdHeadsBench || gDevAutotestHdUiBench) return;
     if (strcmp(name, "heads_missing") == 0 && gameDialogHasHdHead()) {
         devAutotestLog("autotest failed: stale HD head on missing-frame fallback\n");
         exit(EXIT_FAILURE);
