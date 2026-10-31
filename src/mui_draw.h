@@ -104,6 +104,7 @@ SDL_Texture* muiHdArtTexture(const FrmId& frmId, int frame, int* width, int* hei
 // Painted picture (portraits, menu art) as `muiArtTexture` (first frame),
 // smooth scaling: it's shown much larger than drawn.
 SDL_Texture* muiPictureTexture(const FrmId& frmId, int* width, int* height);
+SDL_Texture* muiHdPictureTexture(const FrmId& frmId, int* width, int* height);
 // Line drawing (skilldex pictures: dark ink on paper) as a white texture of
 // the ink only, drawn tinted with `muiDrawTexture`; smooth scaling.
 SDL_Texture* muiLineArtTexture(const FrmId& frmId, int* width, int* height);

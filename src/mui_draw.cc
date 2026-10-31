@@ -854,10 +854,9 @@ SDL_Texture* muiArtTexture(const FrmId& frmId, int frame, int* width, int* heigh
     return entry.texture;
 }
 
-SDL_Texture* muiHdArtTexture(const FrmId& frmId, int frame, int* width, int* height)
+static SDL_Texture* muiHdTexture(const FrmId& frmId, int frame, int width, int height, SDL_Texture* fallback)
 {
-    SDL_Texture* fallback = muiArtTexture(frmId, frame, width, height);
-    if (fallback == nullptr || !hdWorldActive()) {
+    if (fallback == nullptr || !frmId.hasFid() || !hdWorldActive()) {
         return fallback;
     }
 
@@ -867,7 +866,7 @@ SDL_Texture* muiHdArtTexture(const FrmId& frmId, int frame, int* width, int* hei
         found->second.lastUsed = gFrame;
         return found->second.texture;
     }
-    auto image = hdWorldGetFrame(frmId, frame, ROTATION_NE, *width, *height);
+    auto image = hdWorldGetFrame(frmId, frame, ROTATION_NE, width, height);
     if (!image) {
         return fallback;
     }
@@ -896,6 +895,12 @@ SDL_Texture* muiHdArtTexture(const FrmId& frmId, int frame, int* width, int* hei
     gHdUiTextures.emplace(key, HdUiTexture { texture, bytes, gFrame });
     gHdUiTextureBytes += bytes;
     return texture;
+}
+
+SDL_Texture* muiHdArtTexture(const FrmId& frmId, int frame, int* width, int* height)
+{
+    SDL_Texture* fallback = muiArtTexture(frmId, frame, width, height);
+    return fallback != nullptr ? muiHdTexture(frmId, frame, *width, *height, fallback) : nullptr;
 }
 
 SDL_Texture* muiPictureTexture(const FrmId& frmId, int* width, int* height)
@@ -945,6 +950,12 @@ SDL_Texture* muiPictureTexture(const FrmId& frmId, int* width, int* height)
     *width = artWidth;
     *height = artHeight;
     return entry.texture;
+}
+
+SDL_Texture* muiHdPictureTexture(const FrmId& frmId, int* width, int* height)
+{
+    SDL_Texture* fallback = muiPictureTexture(frmId, width, height);
+    return fallback != nullptr ? muiHdTexture(frmId, 0, *width, *height, fallback) : nullptr;
 }
 
 SDL_Texture* muiLineArtTexture(const FrmId& frmId, int* width, int* height)

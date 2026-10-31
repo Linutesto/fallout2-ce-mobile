@@ -177,7 +177,7 @@ namespace {
             for (int column = firstColumn; column <= lastColumn; column++) {
                 int width;
                 int height;
-                SDL_Texture* texture = muiPictureTexture(FrmId(state.tileFids[row * state.tilesPerRow + column]), &width, &height);
+                SDL_Texture* texture = muiHdPictureTexture(FrmId(state.tileFids[row * state.tilesPerRow + column]), &width, &height);
                 if (texture == nullptr) {
                     continue;
                 }
@@ -661,7 +661,7 @@ namespace {
 
         int width;
         int height;
-        SDL_Texture* texture = muiPictureTexture(FrmId(view.pictureFid), &width, &height);
+        SDL_Texture* texture = muiHdPictureTexture(FrmId(view.pictureFid), &width, &height);
         MuiRect picture = content;
         float scale = 1.0f;
         if (texture != nullptr && width > 0 && height > 0) {
