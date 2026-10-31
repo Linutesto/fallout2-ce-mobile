@@ -366,7 +366,10 @@ static std::vector<unsigned char> gGameDialogCanvas;
 // world's LRU; the single 2x composition and SDL texture are dialogue-owned.
 static std::shared_ptr<const HdFrame> gHdHeadFrame;
 static std::vector<unsigned char> gHdHeadBase;
+static std::vector<unsigned char> gHdHeadLegacy;
 static std::vector<uint32_t> gHdHeadPixels;
+static uint32_t gHdHeadPalette[256] = { };
+static int gHdHeadLeft = 0, gHdHeadTop = 0, gHdHeadWidth = 0, gHdHeadHeight = 0;
 static SDL_Texture* gHdHeadTexture = nullptr;
 static bool gHdHeadDirty = false;
 static uint64_t gHdHeadFrameCount = 0;
@@ -3238,6 +3241,8 @@ void _gdDestroyHeadWindow()
     gHdHeadFrame.reset();
     gHdHeadBase.clear();
     gHdHeadBase.shrink_to_fit();
+    gHdHeadLegacy.clear();
+    gHdHeadLegacy.shrink_to_fit();
     gHdHeadPixels.clear();
     gHdHeadPixels.shrink_to_fit();
     gHdHeadDirty = false;
@@ -5673,6 +5678,53 @@ void gameDialogRenderTalkingHead(Art* headFrm, int frame, const HeadFrmId& headI
     }
 }
 
+static void gameDialogComposeHdHead()
+{
+    if (!gHdHeadFrame || gHdHeadBase.size() != 388 * 200 || gHdHeadLegacy.size() != 388 * 200) return;
+    const uint32_t* palette = screenGetPalette();
+    memcpy(gHdHeadPalette, palette, sizeof(gHdHeadPalette));
+    gHdHeadPixels.resize(776 * 400);
+
+    for (int row = 0; row < 200; row++) {
+        for (int col = 0; col < 388; col++) {
+            bool spriteBounds = col >= gHdHeadLeft && col < gHdHeadLeft + gHdHeadWidth
+                && row >= gHdHeadTop && row < gHdHeadTop + gHdHeadHeight;
+            uint32_t color = palette[spriteBounds ? gHdHeadBase[row * 388 + col]
+                                                  : gHdHeadLegacy[row * 388 + col]];
+            int offset = row * 2 * 776 + col * 2;
+            gHdHeadPixels[offset] = color;
+            gHdHeadPixels[offset + 1] = color;
+            gHdHeadPixels[offset + 776] = color;
+            gHdHeadPixels[offset + 777] = color;
+        }
+    }
+    for (int row = 0; row < gHdHeadFrame->height; row++) {
+        int destY = gHdHeadTop * 2 + row;
+        if (destY < 0 || destY >= 400) continue;
+        for (int col = 0; col < gHdHeadFrame->width; col++) {
+            int destX = gHdHeadLeft * 2 + col;
+            if (destX < 0 || destX >= 776) continue;
+            uint32_t source = gHdHeadFrame->pixels[static_cast<size_t>(row) * gHdHeadFrame->width + col];
+            int alpha = source >> 24;
+            if (alpha == 0) continue;
+            source = (source & 0xFF000000) | (screenTransformWorldColor(source) & 0xFFFFFF);
+            uint32_t& dest = gHdHeadPixels[static_cast<size_t>(destY) * 776 + destX];
+            if (alpha == 255) {
+                dest = source;
+            } else {
+                uint32_t result = 0xFF000000;
+                for (int shift = 0; shift <= 16; shift += 8) {
+                    int a = (source >> shift) & 255;
+                    int b = (dest >> shift) & 255;
+                    result |= ((a * alpha + b * (255 - alpha) + 127) / 255) << shift;
+                }
+                dest = result;
+            }
+        }
+    }
+    gHdHeadDirty = true;
+}
+
 static void gameDialogUpdateHdHead(Art* headFrm, int frame, const HeadFrmId& headId, int x, int y)
 {
     gHdHeadFrame.reset();
@@ -5701,48 +5753,13 @@ static void gameDialogUpdateHdHead(Art* headFrm, int frame, const HeadFrmId& hea
     const unsigned char* backgroundData = background.getData();
     gHdHeadBase.assign(backgroundData, backgroundData + 388 * 200);
     const unsigned char* legacy = gameDialogDisplayBuffer;
-    const uint32_t* palette = screenGetPalette();
-    gHdHeadPixels.resize(776 * 400);
-
-    // The indexed frame remains the fallback. Replace only its sprite bounds
-    // with the clean backdrop; outside them retain the game's highlights and
-    // border strips, then put the 2x RGBA frame in the exact legacy position.
+    gHdHeadLegacy.resize(388 * 200);
     for (int row = 0; row < 200; row++) {
-        for (int col = 0; col < 388; col++) {
-            bool spriteBounds = col >= x && col < x + width && row >= y && row < y + height;
-            uint32_t color = palette[spriteBounds ? gHdHeadBase[row * 388 + col] : legacy[row * 640 + col]];
-            int offset = row * 2 * 776 + col * 2;
-            gHdHeadPixels[offset] = color;
-            gHdHeadPixels[offset + 1] = color;
-            gHdHeadPixels[offset + 776] = color;
-            gHdHeadPixels[offset + 777] = color;
-        }
+        memcpy(gHdHeadLegacy.data() + row * 388, legacy + row * 640, 388);
     }
-    for (int row = 0; row < image->height; row++) {
-        int destY = y * 2 + row;
-        if (destY < 0 || destY >= 400) continue;
-        for (int col = 0; col < image->width; col++) {
-            int destX = x * 2 + col;
-            if (destX < 0 || destX >= 776) continue;
-            uint32_t source = image->pixels[static_cast<size_t>(row) * image->width + col];
-            int alpha = source >> 24;
-            if (alpha == 0) continue;
-            uint32_t& dest = gHdHeadPixels[static_cast<size_t>(destY) * 776 + destX];
-            if (alpha == 255) {
-                dest = source;
-            } else {
-                uint32_t result = 0xFF000000;
-                for (int shift = 0; shift <= 16; shift += 8) {
-                    int a = (source >> shift) & 255;
-                    int b = (dest >> shift) & 255;
-                    result |= ((a * alpha + b * (255 - alpha) + 127) / 255) << shift;
-                }
-                dest = result;
-            }
-        }
-    }
+    gHdHeadLeft = x; gHdHeadTop = y; gHdHeadWidth = width; gHdHeadHeight = height;
     gHdHeadFrame = std::move(image);
-    gHdHeadDirty = true;
+    gameDialogComposeHdHead();
     gHdHeadFrameCount++;
 }
 
@@ -5756,6 +5773,8 @@ int gameDialogHdHeadYOffset() { return gameDialogHrArtYOffset(); }
 void gameDialogDrawHdHead(SDL_Renderer* renderer, const SDL_FRect& rect)
 {
     if (!gameDialogHasHdHead() || renderer == nullptr) return;
+    if (memcmp(gHdHeadPalette, screenGetPalette(), sizeof(gHdHeadPalette)) != 0)
+        gameDialogComposeHdHead();
     if (gHdHeadTexture == nullptr) {
         gHdHeadTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
             SDL_TEXTUREACCESS_STATIC, 776, 400);
@@ -5787,7 +5806,8 @@ void gameDialogResetHdRenderer()
 
 void gameDialogHdStats(size_t* compositionBytes, size_t* cacheBytes, unsigned long long* frames)
 {
-    if (compositionBytes) *compositionBytes = gHdHeadPixels.capacity() * sizeof(uint32_t) + gHdHeadBase.capacity();
+    if (compositionBytes) *compositionBytes = gHdHeadPixels.capacity() * sizeof(uint32_t)
+        + gHdHeadBase.capacity() + gHdHeadLegacy.capacity();
     if (cacheBytes) *cacheBytes = hdWorldCacheBytes();
     if (frames) *frames = gHdHeadFrameCount;
 }
