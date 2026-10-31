@@ -685,10 +685,17 @@ static void worldViewDraw(SDL_Renderer* renderer)
     int guard = gFilter >= WORLD_VIEW_FILTER_MMPX ? 3 : 1;
     // Integer source rect covering the visible area (with a guard band
     // for filtering), and matching fractional destination rect.
-    int left = std::max(static_cast<int>(floorf(centerX - halfViewWidth / gZoom)) - guard, 0);
-    int top = std::max(static_cast<int>(floorf(centerY - halfViewHeight / gZoom)) - guard, 0);
-    int right = std::min(static_cast<int>(ceilf(centerX + (gViewWidth - halfViewWidth) / gZoom)) + guard, gWorldWidth);
-    int bottom = std::min(static_cast<int>(ceilf(centerY + (gViewHeight - halfViewHeight) / gZoom)) + guard, gWorldHeight);
+    // The size must not depend on the fractional pan: the HD renderer recreates
+    // its textures, blank, whenever it changes, which flashed the world black
+    // for a frame while dragging the map.
+    int sourceWidth = static_cast<int>(ceilf(gViewWidth / gZoom)) + 1 + guard * 2;
+    int sourceHeight = static_cast<int>(ceilf(gViewHeight / gZoom)) + 1 + guard * 2;
+    int left = static_cast<int>(floorf(centerX - halfViewWidth / gZoom)) - guard;
+    int top = static_cast<int>(floorf(centerY - halfViewHeight / gZoom)) - guard;
+    left = std::max(std::min(left, gWorldWidth - sourceWidth), 0);
+    top = std::max(std::min(top, gWorldHeight - sourceHeight), 0);
+    int right = std::min(left + sourceWidth, gWorldWidth);
+    int bottom = std::min(top + sourceHeight, gWorldHeight);
     if (left >= right || top >= bottom) {
         return;
     }
