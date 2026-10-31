@@ -1,6 +1,7 @@
 #include "npc_story.h"
 #include "game_dialog.h"
 
+#include <cstdlib>
 #include <algorithm>
 #include <assert.h>
 #include <stdio.h>
