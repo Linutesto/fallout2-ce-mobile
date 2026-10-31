@@ -177,7 +177,7 @@ namespace {
             for (int column = firstColumn; column <= lastColumn; column++) {
                 int width;
                 int height;
-                SDL_Texture* texture = muiHdPictureTexture(FrmId(state.tileFids[row * state.tilesPerRow + column]), &width, &height);
+                SDL_Texture* texture = muiPictureTexture(FrmId(state.tileFids[row * state.tilesPerRow + column]), &width, &height);
                 if (texture == nullptr) {
                     continue;
                 }
