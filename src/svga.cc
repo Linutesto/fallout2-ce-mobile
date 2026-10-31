@@ -18,6 +18,7 @@
 #include "dinput.h"
 #include "draw.h"
 #include "game.h"
+#include "game_dialog.h"
 #include "graphics.h"
 #include "hd_world.h"
 #include "input.h"
@@ -34,6 +35,7 @@
 #include "touch_controls.h"
 #include "win32.h"
 #include "window_manager_private.h"
+#include "window_manager.h"
 #include "world_view.h"
 
 namespace fallout {
@@ -750,6 +752,7 @@ static void destroyRenderer()
 {
     worldViewResetRenderer();
     muiResetRenderer();
+    gameDialogResetHdRenderer();
 
     if (gSdlTextureSurface != nullptr) {
         SDL_FreeSurface(gSdlTextureSurface);
@@ -873,6 +876,15 @@ void renderPresent()
         perfMonitorMark(&start);
         SDL_RenderCopy(gSdlRenderer, gSdlTexture, nullptr, nullptr);
         perfMonitorSpan(PerfSpan::ScreenDraw, start);
+
+        if (gameDialogHasHdHead()) {
+            Window* background = windowGetWindow(gameDialogGetBackgroundWindow());
+            if (background != nullptr && (background->flags & WINDOW_HIDDEN) == 0) {
+                SDL_FRect headRect = { static_cast<float>(background->rect.left + 126),
+                    static_cast<float>(background->rect.top + 14 + gameDialogHdHeadYOffset()), 388.0f, 200.0f };
+                gameDialogDrawHdHead(gSdlRenderer, headRect);
+            }
+        }
     }
     // render movie SDL texture if present
     movieRenderDirectOverlay();

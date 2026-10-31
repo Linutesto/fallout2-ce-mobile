@@ -32,6 +32,8 @@
 #include "game_config.h"
 #include "game_mouse.h"
 #include "game_sound.h"
+#include "hd_art.h"
+#include "hd_world.h"
 #include "input.h"
 #include "interface.h"
 #include "inventory.h"
@@ -359,6 +361,19 @@ static int gameDialogWindow = -1;
 // CE: Pixels of the dialog's background without its window (see
 // `gameDialogWindowless`).
 static std::vector<unsigned char> gGameDialogCanvas;
+
+// Only the current animation frame is pinned. The decoded frames share the
+// world's LRU; the single 2x composition and SDL texture are dialogue-owned.
+static std::shared_ptr<const HdFrame> gHdHeadFrame;
+static std::vector<unsigned char> gHdHeadBase;
+static std::vector<uint32_t> gHdHeadPixels;
+static SDL_Texture* gHdHeadTexture = nullptr;
+static bool gHdHeadDirty = false;
+static uint64_t gHdHeadFrameCount = 0;
+static uint64_t gHdHeadFallbackCount = 0;
+static SDL_FRect gHdHeadLastRect = { 0, 0, 0, 0 };
+static double gHdHeadDrawScaleX = 1.0;
+static double gHdHeadDrawScaleY = 1.0;
 
 static bool gameDialogUseHrArt = false;
 
@@ -804,7 +819,8 @@ static int gameDialogWindowRenderBackground();
 static int _talkToRefreshDialogWindowRect(Rect* rect);
 static void gameDialogRenderHighlight(unsigned char* src, int srcWidth, int srcHeight, int srcPitch, unsigned char* dest, int x, int y, int destPitch, Color* blendTable, Color* unusedGrayTable);
 static const char* expandedBarterFrmName();
-static void gameDialogRenderTalkingHead(Art* headFrm, int frame);
+static void gameDialogRenderTalkingHead(Art* headFrm, int frame, const HeadFrmId& headId);
+static void gameDialogUpdateHdHead(Art* headFrm, int frame, const HeadFrmId& headId, int x, int y);
 static void gameDialogHighlightsInit();
 static void gameDialogHighlightsExit();
 
@@ -3219,6 +3235,13 @@ int _gdCreateHeadWindow()
 // 0x447294
 void _gdDestroyHeadWindow()
 {
+    gHdHeadFrame.reset();
+    gHdHeadBase.clear();
+    gHdHeadBase.shrink_to_fit();
+    gHdHeadPixels.clear();
+    gHdHeadPixels.shrink_to_fit();
+    gHdHeadDirty = false;
+    gameDialogResetHdRenderer();
     if (gameDialogWindow != -1 || gameDialogWindowless()) {
         gameDialogDisplayBuffer = nullptr;
     }
@@ -3258,7 +3281,7 @@ void _gdSetupFidget(const HeadFrmId& headFrmId, HeadFidget reaction)
         gameDialogFidgetReaction = HeadFidget::Invalid;
         gameDialogFidgetUpdateDelay = 0;
         gameDialogFidgetLastUpdateTimestamp = 0;
-        gameDialogRenderTalkingHead(nullptr, 0);
+        gameDialogRenderTalkingHead(nullptr, 0, HeadFrmId());
         _lipsFrmId = HeadFrameId::None;
         _lipsKey = nullptr;
         _lipsFp = nullptr;
@@ -3435,7 +3458,7 @@ void gameDialogWaitForFidgetToComplete()
         sharedFpsLimiter.mark();
 
         if (getTicksSince(gameDialogFidgetLastUpdateTimestamp) >= gameDialogFidgetUpdateDelay) {
-            gameDialogRenderTalkingHead(gameDialogFidgetFrm, gameDialogFidgetFrmCurrentFrame);
+            gameDialogRenderTalkingHead(gameDialogFidgetFrm, gameDialogFidgetFrmCurrentFrame, gameDialogFidgetFrmId);
             gameDialogFidgetLastUpdateTimestamp = getTicks();
             gameDialogFidgetFrmCurrentFrame++;
         }
@@ -3486,7 +3509,7 @@ void _gdPlayTransition(HeadAnimation anim)
         sharedFpsLimiter.mark();
 
         if (getTicksSince(time) >= delay) {
-            gameDialogRenderTalkingHead(headFrm, frame);
+            gameDialogRenderTalkingHead(headFrm, frame, headFid);
             time = getTicks();
             frame++;
         }
@@ -3739,13 +3762,13 @@ void gameDialogTicker()
 
         if (gLipsPhonemeChanged) {
             int phoneme = gLipsCurrentPhoneme < PHONEME_COUNT ? gLipsCurrentPhoneme : 0;
-            gameDialogRenderTalkingHead(_lipsFp, _head_phoneme_lookup[phoneme]);
+            gameDialogRenderTalkingHead(_lipsFp, _head_phoneme_lookup[phoneme], _lipsFrmId);
             gLipsPhonemeChanged = false;
         }
 
         if (!soundIsPlaying(gLipsData.sound)) {
             gameDialogEndLips();
-            gameDialogRenderTalkingHead(_lipsFp, 0);
+            gameDialogRenderTalkingHead(_lipsFp, 0, _lipsFrmId);
             _can_start_new_fidget = true;
             _dialogue_seconds_since_last_input = 3;
             gameDialogFidgetFrmCurrentFrame = 0;
@@ -3765,10 +3788,10 @@ void gameDialogTicker()
 
     if (getTicksSince(gameDialogFidgetLastUpdateTimestamp) >= gameDialogFidgetUpdateDelay) {
         if (artGetFrameCount(gameDialogFidgetFrm) <= gameDialogFidgetFrmCurrentFrame) {
-            gameDialogRenderTalkingHead(gameDialogFidgetFrm, 0);
+            gameDialogRenderTalkingHead(gameDialogFidgetFrm, 0, gameDialogFidgetFrmId);
             _can_start_new_fidget = true;
         } else {
-            gameDialogRenderTalkingHead(gameDialogFidgetFrm, gameDialogFidgetFrmCurrentFrame);
+            gameDialogRenderTalkingHead(gameDialogFidgetFrm, gameDialogFidgetFrmCurrentFrame, gameDialogFidgetFrmId);
             gameDialogFidgetLastUpdateTimestamp = getTicks();
             gameDialogFidgetFrmCurrentFrame += 1;
         }
@@ -5534,12 +5557,14 @@ void gameDialogRenderHighlight(unsigned char* src, int srcWidth, int srcHeight, 
 }
 
 // 0x44ACFC
-void gameDialogRenderTalkingHead(Art* headFrm, int frame)
+void gameDialogRenderTalkingHead(Art* headFrm, int frame, const HeadFrmId& headId)
 {
     if (!gameDialogHeadShown()) {
         return;
     }
 
+    int hdX = 0;
+    int hdY = 0;
     if (headFrm != nullptr) {
         if (frame == 0) {
             _totalHotx = 0;
@@ -5579,6 +5604,9 @@ void gameDialogRenderTalkingHead(Art* headFrm, int frame)
             if (destOffset + destWidth * rotationOffsetY > 0) {
                 destOffset += destWidth * rotationOffsetY;
             }
+
+            hdX = destOffset % destWidth;
+            hdY = destOffset / destWidth;
 
             blitBufferToBufferTrans(
                 data,
@@ -5638,8 +5666,163 @@ void gameDialogRenderTalkingHead(Art* headFrm, int frame)
             GAME_DIALOG_WINDOW_WIDTH);
     }
 
+    gameDialogUpdateHdHead(headFrm, frame, headId, hdX, hdY);
+
     if (!gameDialogWindowless()) {
         windowRefreshRect(gameDialogBackgroundWindow, &headRect);
+    }
+}
+
+static void gameDialogUpdateHdHead(Art* headFrm, int frame, const HeadFrmId& headId, int x, int y)
+{
+    gHdHeadFrame.reset();
+    gHdHeadPixels.clear();
+    gHdHeadDirty = false;
+    if (headFrm == nullptr || !headId.valid() || !hdWorldActive()) return;
+
+    int width = artGetWidth(headFrm, frame);
+    int height = artGetHeight(headFrm, frame);
+    auto image = hdWorldGetFrame(headId, frame, ROTATION_NE, width, height);
+    if (!image) {
+        gHdHeadFallbackCount++;
+        return;
+    }
+
+    FrmImage background;
+    if (!background.lock(gameDialogBackgroundFrmId) || background.getData() == nullptr
+        || background.getWidth() != 388 || background.getHeight() != 200) return;
+
+    const unsigned char* backgroundData = background.getData();
+    gHdHeadBase.assign(backgroundData, backgroundData + 388 * 200);
+    const unsigned char* legacy = gameDialogDisplayBuffer;
+    const uint32_t* palette = screenGetPalette();
+    gHdHeadPixels.resize(776 * 400);
+
+    // The indexed frame remains the fallback. Replace only its sprite bounds
+    // with the clean backdrop; outside them retain the game's highlights and
+    // border strips, then put the 2x RGBA frame in the exact legacy position.
+    for (int row = 0; row < 200; row++) {
+        for (int col = 0; col < 388; col++) {
+            bool spriteBounds = col >= x && col < x + width && row >= y && row < y + height;
+            uint32_t color = palette[spriteBounds ? gHdHeadBase[row * 388 + col] : legacy[row * 640 + col]];
+            int offset = row * 2 * 776 + col * 2;
+            gHdHeadPixels[offset] = color;
+            gHdHeadPixels[offset + 1] = color;
+            gHdHeadPixels[offset + 776] = color;
+            gHdHeadPixels[offset + 777] = color;
+        }
+    }
+    for (int row = 0; row < image->height; row++) {
+        int destY = y * 2 + row;
+        if (destY < 0 || destY >= 400) continue;
+        for (int col = 0; col < image->width; col++) {
+            int destX = x * 2 + col;
+            if (destX < 0 || destX >= 776) continue;
+            uint32_t source = image->pixels[static_cast<size_t>(row) * image->width + col];
+            int alpha = source >> 24;
+            if (alpha == 0) continue;
+            uint32_t& dest = gHdHeadPixels[static_cast<size_t>(destY) * 776 + destX];
+            if (alpha == 255) {
+                dest = source;
+            } else {
+                uint32_t result = 0xFF000000;
+                for (int shift = 0; shift <= 16; shift += 8) {
+                    int a = (source >> shift) & 255;
+                    int b = (dest >> shift) & 255;
+                    result |= ((a * alpha + b * (255 - alpha) + 127) / 255) << shift;
+                }
+                dest = result;
+            }
+        }
+    }
+    gHdHeadFrame = std::move(image);
+    gHdHeadDirty = true;
+    gHdHeadFrameCount++;
+}
+
+bool gameDialogHasHdHead()
+{
+    return gameDialogIsTalking() && !gHdHeadPixels.empty() && settings.graphics.hd_art;
+}
+
+int gameDialogHdHeadYOffset() { return gameDialogHrArtYOffset(); }
+
+void gameDialogDrawHdHead(SDL_Renderer* renderer, const SDL_FRect& rect)
+{
+    if (!gameDialogHasHdHead() || renderer == nullptr) return;
+    if (gHdHeadTexture == nullptr) {
+        gHdHeadTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
+            SDL_TEXTUREACCESS_STATIC, 776, 400);
+        if (gHdHeadTexture == nullptr) return;
+        SDL_SetTextureBlendMode(gHdHeadTexture, SDL_BLENDMODE_NONE);
+        SDL_SetTextureScaleMode(gHdHeadTexture, SDL_ScaleModeLinear);
+        gHdHeadDirty = true;
+    }
+    if (gHdHeadDirty) {
+        if (SDL_UpdateTexture(gHdHeadTexture, nullptr, gHdHeadPixels.data(), 776 * 4) != 0) return;
+        gHdHeadDirty = false;
+    }
+    if (SDL_RenderCopyF(renderer, gHdHeadTexture, nullptr, &rect) == 0) {
+        gHdHeadLastRect = rect;
+        int logicalWidth = 0, logicalHeight = 0, outputWidth = 0, outputHeight = 0;
+        SDL_RenderGetLogicalSize(renderer, &logicalWidth, &logicalHeight);
+        SDL_GetRendererOutputSize(renderer, &outputWidth, &outputHeight);
+        gHdHeadDrawScaleX = logicalWidth > 0 ? static_cast<double>(outputWidth) / logicalWidth : 1.0;
+        gHdHeadDrawScaleY = logicalHeight > 0 ? static_cast<double>(outputHeight) / logicalHeight : 1.0;
+    }
+}
+
+void gameDialogResetHdRenderer()
+{
+    if (gHdHeadTexture) SDL_DestroyTexture(gHdHeadTexture);
+    gHdHeadTexture = nullptr;
+    gHdHeadDirty = true;
+}
+
+void gameDialogHdStats(size_t* compositionBytes, size_t* cacheBytes, unsigned long long* frames)
+{
+    if (compositionBytes) *compositionBytes = gHdHeadPixels.capacity() * sizeof(uint32_t) + gHdHeadBase.capacity();
+    if (cacheBytes) *cacheBytes = hdWorldCacheBytes();
+    if (frames) *frames = gHdHeadFrameCount;
+}
+
+unsigned long long gameDialogHdFallbackFrames() { return gHdHeadFallbackCount; }
+
+void gameDialogHdReadbackMetrics(const unsigned char* rgba, int width, int height,
+    double* hdError, double* legacyError)
+{
+    *hdError = *legacyError = -1.0;
+    if (!gameDialogHasHdHead() || rgba == nullptr || width <= 0 || height <= 0
+        || gHdHeadLastRect.w <= 0 || gHdHeadLastRect.h <= 0) return;
+    double sx = gHdHeadDrawScaleX;
+    double sy = gHdHeadDrawScaleY;
+    devAutotestNote("HD head rect %.1f,%.1f %.1fx%.1f output %dx%d scale %.2f,%.2f\n",
+        gHdHeadLastRect.x, gHdHeadLastRect.y, gHdHeadLastRect.w, gHdHeadLastRect.h,
+        width, height, sx, sy);
+    const uint32_t* palette = screenGetPalette();
+    double hdTotal = 0.0, legacyTotal = 0.0;
+    int samples = 0;
+    for (int row = 1; row < 10; row++) {
+        for (int col = 1; col < 20; col++) {
+            double u = static_cast<double>(col) / 20.0;
+            double v = static_cast<double>(row) / 10.0;
+            int px = static_cast<int>((gHdHeadLastRect.x + u * gHdHeadLastRect.w) * sx);
+            int py = static_cast<int>((gHdHeadLastRect.y + v * gHdHeadLastRect.h) * sy);
+            if (px < 0 || px >= width || py < 0 || py >= height) continue;
+            uint32_t hd = gHdHeadPixels[static_cast<int>(v * 399) * 776 + static_cast<int>(u * 775)];
+            uint32_t legacy = palette[gameDialogDisplayBuffer[static_cast<int>(v * 199) * 640 + static_cast<int>(u * 387)]];
+            const unsigned char* actual = rgba + (static_cast<size_t>(py) * width + px) * 4;
+            for (int channel = 0; channel < 3; channel++) {
+                int shift = 16 - channel * 8;
+                hdTotal += std::abs(static_cast<int>(actual[channel]) - static_cast<int>((hd >> shift) & 255));
+                legacyTotal += std::abs(static_cast<int>(actual[channel]) - static_cast<int>((legacy >> shift) & 255));
+            }
+            samples += 3;
+        }
+    }
+    if (samples) {
+        *hdError = hdTotal / samples;
+        *legacyError = legacyTotal / samples;
     }
 }
 

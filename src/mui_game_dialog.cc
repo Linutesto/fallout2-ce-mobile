@@ -20,6 +20,7 @@
 #include "object.h"
 #include "pipboy.h"
 #include "skill.h"
+#include "svga.h"
 
 namespace fallout {
 
@@ -206,6 +207,8 @@ namespace {
         MuiRect headRect = muiFitRect(rect, static_cast<float>(width), static_cast<float>(height));
         muiFillRoundRect(headRect, ui.dp(6.0f), kBackground);
         muiDrawTexture(texture, headRect);
+        SDL_FRect hdRect = { headRect.x, headRect.y, headRect.w, headRect.h };
+        gameDialogDrawHdHead(gSdlRenderer, hdRect);
         muiStrokeRoundRect(headRect.inset(-ui.dp(1.0f)), ui.dp(6.0f), ui.dp(theme.borderWidth), theme.panelBorder);
     }
 

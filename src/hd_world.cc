@@ -629,6 +629,11 @@ void hdWorldExit()
 
 bool hdWorldInstalled() { return gInstalled; }
 bool hdWorldActive() { return gInstalled && settings.graphics.hd_art && worldViewIsEnabled(); }
+std::shared_ptr<const HdFrame> hdWorldGetFrame(const FrmId& id, int frame, int rotation, int width, int height)
+{
+    return hdWorldActive() && gCache ? gCache->get(id.filePath(), rotation, frame, width, height) : nullptr;
+}
+size_t hdWorldCacheBytes() { return gCache ? gCache->bytes() : 0; }
 bool hdWorldHasHdFrame(const FrmId& id, Art* art, int frame, int rotation)
 {
     return hdWorldActive() && art != nullptr

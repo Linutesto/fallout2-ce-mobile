@@ -1,6 +1,8 @@
 #ifndef GAME_DIALOG_H
 #define GAME_DIALOG_H
 
+#include <SDL.h>
+#include <cstddef>
 #include "art.h"
 #include "interpreter.h"
 #include "obj_types.h"
@@ -129,6 +131,15 @@ int gameDialogGetReviewCount();
 void gameDialogGetReviewEntry(int index, const char** reply, const char** option);
 // Talking head / map around the speaker as drawn by the game.
 bool gameDialogGetHeadImage(const unsigned char** data, int* width, int* height, int* pitch);
+// The current 2x head composition, drawn after the indexed dialogue window.
+void gameDialogDrawHdHead(SDL_Renderer* renderer, const SDL_FRect& rect);
+void gameDialogResetHdRenderer();
+bool gameDialogHasHdHead();
+int gameDialogHdHeadYOffset();
+void gameDialogHdStats(size_t* compositionBytes, size_t* cacheBytes, unsigned long long* frames);
+void gameDialogHdReadbackMetrics(const unsigned char* rgba, int width, int height,
+    double* hdError, double* legacyError);
+unsigned long long gameDialogHdFallbackFrames();
 bool gameDialogSpeakerCanBarter();
 
 } // namespace fallout

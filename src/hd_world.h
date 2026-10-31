@@ -4,8 +4,10 @@
 #include <SDL.h>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 namespace fallout {
 struct Art;
+struct HdFrame;
 class FrmId;
 struct HdDrawOptions {
     const int* lightMap = nullptr;
@@ -23,6 +25,9 @@ void hdWorldExit();
 bool hdWorldInstalled();
 bool hdWorldActive();
 bool hdWorldHasHdFrame(const FrmId& id, Art* art, int frame, int rotation);
+// Dialogue uses the same decoded-image LRU and budget as world art.
+std::shared_ptr<const HdFrame> hdWorldGetFrame(const FrmId& id, int frame, int rotation, int width, int height);
+size_t hdWorldCacheBytes();
 void hdWorldSettingsChanged();
 void hdWorldSetFilter(int filter);
 void hdWorldClear(const Rect& rect);
