@@ -202,11 +202,15 @@ namespace {
 
         int gaugeWidth;
         int gaugeHeight;
-        SDL_Texture* gauge = muiArtTexture(FrmId(InterfaceFrameId::MapElevatorGaj000), 0, &gaugeWidth, &gaugeHeight);
+        SDL_Texture* gauge = muiHdArtTexture(FrmId(InterfaceFrameId::MapElevatorGaj000), 0, &gaugeWidth, &gaugeHeight);
         if (gauge != nullptr) {
             int frameHeight = gaugeHeight / kGaugeFrames;
             int frame = std::clamp(static_cast<int>(gaugePosition(ui.now)), 0, kGaugeFrames - 1);
-            muiDrawTexturePart(gauge, { 0, frame * frameHeight, gaugeWidth, frameHeight },
+            int textureWidth = gaugeWidth;
+            int textureHeight = gaugeHeight;
+            SDL_QueryTexture(gauge, nullptr, nullptr, &textureWidth, &textureHeight);
+            int imageScale = textureWidth == gaugeWidth * 2 && textureHeight == gaugeHeight * 2 ? 2 : 1;
+            muiDrawTexturePart(gauge, { 0, frame * frameHeight * imageScale, gaugeWidth * imageScale, frameHeight * imageScale },
                 art(static_cast<float>(kGaugeX), static_cast<float>(kGaugeY), static_cast<float>(gaugeWidth), static_cast<float>(frameHeight)));
         }
 
