@@ -367,6 +367,7 @@ static std::vector<unsigned char> gGameDialogCanvas;
 static std::shared_ptr<const HdFrame> gHdHeadFrame;
 static std::vector<unsigned char> gHdHeadBase;
 static std::vector<unsigned char> gHdHeadLegacy;
+static std::vector<unsigned char> gHdHeadBeforeHighlights;
 static std::vector<uint32_t> gHdHeadPixels;
 static uint32_t gHdHeadPalette[256] = { };
 static int gHdHeadLeft = 0, gHdHeadTop = 0, gHdHeadWidth = 0, gHdHeadHeight = 0;
@@ -3243,6 +3244,8 @@ void _gdDestroyHeadWindow()
     gHdHeadBase.shrink_to_fit();
     gHdHeadLegacy.clear();
     gHdHeadLegacy.shrink_to_fit();
+    gHdHeadBeforeHighlights.clear();
+    gHdHeadBeforeHighlights.shrink_to_fit();
     gHdHeadPixels.clear();
     gHdHeadPixels.shrink_to_fit();
     gHdHeadDirty = false;
@@ -5637,6 +5640,15 @@ void gameDialogRenderTalkingHead(Art* headFrm, int frame, const HeadFrmId& headI
 
     unsigned char* dest = gameDialogBackgroundPixels();
 
+    // Keep the indexed portrait before the original monitor highlights, so
+    // their color changes can also be applied to the HD portrait.
+    if (headFrm != nullptr && hdWorldActive()) {
+        gHdHeadBeforeHighlights.resize(388 * 200);
+        for (int row = 0; row < 200; row++) {
+            memcpy(gHdHeadBeforeHighlights.data() + row * 388, gameDialogDisplayBuffer + row * 640, 388);
+        }
+    }
+
     gameDialogRenderHighlight(_upperHighlightFrmImage.getData(),
         _upperHighlightFrmImage.getWidth(),
         _upperHighlightFrmImage.getHeight(),
@@ -5722,6 +5734,39 @@ static void gameDialogComposeHdHead()
             }
         }
     }
+    // The highlight FRMs are indexed alpha effects. Transfer the legacy
+    // before/after color change onto each HD subpixel, retaining its detail.
+    auto applyHighlight = [&](FrmImage& highlight, int left, int top) {
+        const unsigned char* mask = highlight.getData();
+        int width = highlight.getWidth();
+        int height = highlight.getHeight();
+        if (mask == nullptr || gHdHeadBeforeHighlights.size() != 388 * 200) return;
+        for (int row = 0; row < height; row++) {
+            int y = top + row;
+            if (y < 0 || y >= 200) continue;
+            for (int col = 0; col < width; col++) {
+                int x = left + col;
+                if (x < 0 || x >= 388 || mask[row * width + col] == 0) continue;
+                int index = y * 388 + x;
+                uint32_t before = palette[gHdHeadBeforeHighlights[index]];
+                uint32_t after = palette[gHdHeadLegacy[index]];
+                for (int sy = 0; sy < 2; sy++) {
+                    for (int sx = 0; sx < 2; sx++) {
+                        uint32_t& pixel = gHdHeadPixels[(y * 2 + sy) * 776 + x * 2 + sx];
+                        uint32_t adjusted = 0xFF000000;
+                        for (int shift = 0; shift <= 16; shift += 8) {
+                            int value = static_cast<int>((pixel >> shift) & 255) + static_cast<int>((after >> shift) & 255)
+                                - static_cast<int>((before >> shift) & 255);
+                            adjusted |= static_cast<uint32_t>(std::clamp(value, 0, 255)) << shift;
+                        }
+                        pixel = adjusted;
+                    }
+                }
+            }
+        }
+    };
+    applyHighlight(_upperHighlightFrmImage, 300, 1);
+    applyHighlight(_lowerHighlightFrmImage, 3, 198 - _lowerHighlightFrmImage.getHeight());
     // The original window redraws its keyed monitor bezel over every head
     // frame. Restore those pixels after the HD image, including its rounded
     // corners, so the portrait has exactly the original clipping shape.
@@ -5838,7 +5883,7 @@ void gameDialogResetHdRenderer()
 void gameDialogHdStats(size_t* compositionBytes, size_t* cacheBytes, unsigned long long* frames)
 {
     if (compositionBytes) *compositionBytes = gHdHeadPixels.capacity() * sizeof(uint32_t)
-        + gHdHeadBase.capacity() + gHdHeadLegacy.capacity();
+        + gHdHeadBase.capacity() + gHdHeadLegacy.capacity() + gHdHeadBeforeHighlights.capacity();
     if (cacheBytes) *cacheBytes = hdWorldCacheBytes();
     if (frames) *frames = gHdHeadFrameCount;
 }
