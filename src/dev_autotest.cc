@@ -486,6 +486,7 @@ enum DevAutotestAction {
     DEV_AUTOTEST_ACTION_HD_CHECK_DOOR,
     DEV_AUTOTEST_ACTION_HD_CHECK_SETTING,
     DEV_AUTOTEST_ACTION_HD_INIT_SETTING,
+    DEV_AUTOTEST_ACTION_HD_UI_ENABLE,
 };
 
 struct DevAutotestStep {
@@ -1084,6 +1085,8 @@ static const DevAutotestStep kDevAutotestHdHeadsReviewSteps[] = {
     { DEV_AUTOTEST_ACTION_ASSERT_TALK_CLOSED, 0, 0, 0, 10, "review12_map" },
 };
 static bool gDevAutotestHdHeads = false;
+static bool gDevAutotestHdUiFallback = false;
+static std::vector<unsigned char> gDevAutotestHdUiReference;
 static bool gDevAutotestHdHeadsFallback = false;
 static bool gDevAutotestHdHeadsBench = false;
 bool devAutotestHdHeadsFallback() { return gDevAutotestHdHeadsFallback; }
@@ -1462,6 +1465,36 @@ static void devAutotestCheckMods()
 
 // Mobile UI inventory screen: ammo into a weapon, item into a bag, armor
 // and hands, bag opened and closed, item taken out, dropping.
+static const DevAutotestStep kDevAutotestHdUiSteps[] = {
+    { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 300, "ui_start" },
+    { DEV_AUTOTEST_ACTION_GIVE_ITEM, 8, 0, 0, 1, "ui_pistol" },
+    { DEV_AUTOTEST_ACTION_COMMAND, static_cast<int>(GameCommandType::Inventory), 0, 0, 45, "ui_inventory" },
+    { DEV_AUTOTEST_ACTION_CHECK_WIDGET, 1, 0, 0, 1, "ui_pistol_visible", "inventory.pid.8" },
+    { DEV_AUTOTEST_ACTION_HD_UI_ENABLE, 0, 0, 0, 5, "ui_item_off" },
+    { DEV_AUTOTEST_ACTION_HD_UI_ENABLE, 1, 0, 0, 5, "ui_item_on" },
+    { DEV_AUTOTEST_ACTION_BACK, 0, 0, 0, 30, "ui_inventory_closed" },
+    { DEV_AUTOTEST_ACTION_KILL_CRITTER, 0, 0, 0, 60, "ui_kill" },
+    { DEV_AUTOTEST_ACTION_GIVE_CORPSE_ITEM, 8, 0, 0, 1, "ui_corpse_pistol" },
+    { DEV_AUTOTEST_ACTION_CENTER_CORPSE, 0, 0, 0, 10, "ui_corpse_centered" },
+    { DEV_AUTOTEST_ACTION_TOUCH_TAP_CORPSE, 0, 0, 0, 240, "ui_loot" },
+    { DEV_AUTOTEST_ACTION_CHECK_WIDGET, 1, 0, 0, 1, "ui_loot_visible", "loot.right.pid.8" },
+    { DEV_AUTOTEST_ACTION_HD_UI_ENABLE, 0, 0, 0, 5, "ui_loot_item_off" },
+    { DEV_AUTOTEST_ACTION_HD_UI_ENABLE, 1, 0, 0, 5, "ui_loot_item_on" },
+    { DEV_AUTOTEST_ACTION_BACK, 0, 0, 0, 30, "ui_loot_closed" },
+    { DEV_AUTOTEST_ACTION_COMMAND, static_cast<int>(GameCommandType::Character), 0, 0, 45, "ui_character" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "ui_skills_tab", "character.tab.skills" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "ui_unarmed", "character.skills.3" },
+    { DEV_AUTOTEST_ACTION_HD_UI_ENABLE, 0, 0, 0, 5, "ui_art_off" },
+    { DEV_AUTOTEST_ACTION_HD_UI_ENABLE, 1, 0, 0, 5, "ui_art_on" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 30, "ui_character_closed", "character.nav.back" },
+    { DEV_AUTOTEST_ACTION_COMMAND, static_cast<int>(GameCommandType::Pipboy), 0, 0, 45, "ui_pipboy" },
+    { DEV_AUTOTEST_ACTION_CHECK_WIDGET, 1, 0, 0, 1, "ui_pipboy_visible", "pipboy.section.quests" },
+    { DEV_AUTOTEST_ACTION_BACK, 0, 0, 0, 30, "ui_pipboy_closed" },
+    { DEV_AUTOTEST_ACTION_HUD_TAP, HUD_ELEMENT(Skills), 0, 0, 20, "ui_skilldex" },
+    { DEV_AUTOTEST_ACTION_CHECK_WIDGET, 1, 0, 0, 1, "ui_skilldex_visible", "skills.0" },
+    { DEV_AUTOTEST_ACTION_BACK, 0, 0, 0, 30, "ui_done" },
+};
+
 static const DevAutotestStep kDevAutotestInventorySteps[] = {
     { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 30, "i00_map" },
     { DEV_AUTOTEST_ACTION_GIVE_ITEM, 8, 0, 0, 1, "i01_give_pistol" },
@@ -3136,7 +3169,11 @@ static void devAutotestPrepareSaves()
 
 void devAutotestSetScenario(const char* name)
 {
-    if (strcmp(name, "hd") == 0) {
+    if (strcmp(name, "hd-ui") == 0 || strcmp(name, "hd-ui-fallback") == 0) {
+        gDevAutotestSteps = kDevAutotestHdUiSteps;
+        gDevAutotestStepCount = sizeof(kDevAutotestHdUiSteps) / sizeof(kDevAutotestHdUiSteps[0]);
+        gDevAutotestHdUiFallback = strcmp(name, "hd-ui-fallback") == 0;
+    } else if (strcmp(name, "hd") == 0) {
         gDevAutotestSteps = kDevAutotestHdSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestHdSteps) / sizeof(kDevAutotestHdSteps[0]);
     } else if (strcmp(name, "hd-settings") == 0) {
@@ -4553,6 +4590,9 @@ void devAutotestTick()
 
         Rect visibleRect;
         switch (step->action) {
+        case DEV_AUTOTEST_ACTION_HD_UI_ENABLE:
+            settings.graphics.hd_art = step->a != 0;
+            break;
         case DEV_AUTOTEST_ACTION_HD_INIT_SETTING:
             settings.graphics.hd_art = true;
             settingsSave();
@@ -7539,6 +7579,49 @@ void devAutotestCapture(SDL_Renderer* renderer)
     if (SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ABGR8888, pixels.data(), width * 4) != 0) {
         devAutotestLog("%s: read pixels failed: %s\n", name, SDL_GetError());
         return;
+    }
+
+    if (strcmp(name, "ui_item_off") == 0 || strcmp(name, "ui_loot_item_off") == 0 || strcmp(name, "ui_art_off") == 0) {
+        gDevAutotestHdUiReference = pixels;
+    } else if (strcmp(name, "ui_item_on") == 0 || strcmp(name, "ui_loot_item_on") == 0 || strcmp(name, "ui_art_on") == 0) {
+        if (gDevAutotestHdUiReference.size() != pixels.size()) {
+            devAutotestLog("FAIL: HD UI reference missing\n");
+            exit(EXIT_FAILURE);
+        }
+        int left, top, right, bottom;
+        bool loot = strcmp(name, "ui_loot_item_on") == 0;
+        bool item = loot || strcmp(name, "ui_item_on") == 0;
+        if (item) {
+            float x, y;
+            if (!muiGetWidgetCenter(loot ? "loot.right.pid.8" : "inventory.pid.8", &x, &y)) {
+                devAutotestLog("FAIL: HD UI pistol widget missing\n");
+                exit(EXIT_FAILURE);
+            }
+            left = static_cast<int>((x - 0.025f) * width);
+            right = static_cast<int>((x + 0.025f) * width);
+            top = static_cast<int>((y - 0.035f) * height);
+            bottom = static_cast<int>((y + 0.035f) * height);
+        } else {
+            left = static_cast<int>(width * 0.72f);
+            right = static_cast<int>(width * 0.94f);
+            top = static_cast<int>(height * 0.06f);
+            bottom = static_cast<int>(height * 0.31f);
+        }
+        left = std::clamp(left, 0, width);
+        right = std::clamp(right, 0, width);
+        top = std::clamp(top, 0, height);
+        bottom = std::clamp(bottom, 0, height);
+        size_t changed = 0;
+        for (int y = top; y < bottom; y++) {
+            for (int x = left; x < right; x++) {
+                size_t offset = (static_cast<size_t>(y) * width + x) * 4;
+                if (memcmp(pixels.data() + offset, gDevAutotestHdUiReference.data() + offset, 3) != 0) changed++;
+            }
+        }
+        bool ok = item && gDevAutotestHdUiFallback ? changed == 0 : changed >= 20;
+        devAutotestLog("HD UI %s readback changed=%zu: %s\n", name, changed, ok ? "PASS" : "FAIL");
+        if (!ok) exit(EXIT_FAILURE);
+        gDevAutotestHdUiReference.clear();
     }
 
     if (strcmp(name, "heads02a_cursor") == 0 && !muiIsEnabled() && !touchControlsIsEnabled()) {
