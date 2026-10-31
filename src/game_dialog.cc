@@ -365,6 +365,7 @@ static std::vector<unsigned char> gGameDialogCanvas;
 // Only the current animation frame is pinned. The decoded frames share the
 // world's LRU; the single 2x composition and SDL texture are dialogue-owned.
 static std::shared_ptr<const HdFrame> gHdHeadFrame;
+static std::shared_ptr<const HdFrame> gHdHeadBackground;
 static std::vector<unsigned char> gHdHeadBase;
 static std::vector<unsigned char> gHdHeadLegacy;
 static std::vector<unsigned char> gHdHeadBeforeHighlights;
@@ -3240,6 +3241,7 @@ int _gdCreateHeadWindow()
 void _gdDestroyHeadWindow()
 {
     gHdHeadFrame.reset();
+    gHdHeadBackground.reset();
     gHdHeadBase.clear();
     gHdHeadBase.shrink_to_fit();
     gHdHeadLegacy.clear();
@@ -5710,6 +5712,28 @@ static void gameDialogComposeHdHead()
             gHdHeadPixels[offset + 777] = color;
         }
     }
+    // The dialogue background sits under the head and the monitor's indexed
+    // highlights and bezel. Use the validated 2x frame in the same rectangle.
+    if (gHdHeadBackground) {
+        for (size_t i = 0; i < gHdHeadPixels.size(); i++) {
+            uint32_t source = gHdHeadBackground->pixels[i];
+            unsigned int alpha = source >> 24;
+            if (alpha == 0) continue;
+            source = screenTransformWorldColor(source);
+            if (alpha == 255) {
+                gHdHeadPixels[i] = 0xFF000000 | (source & 0xFFFFFF);
+            } else {
+                uint32_t dest = gHdHeadPixels[i];
+                uint32_t blended = 0xFF000000;
+                for (int shift = 0; shift <= 16; shift += 8) {
+                    int a = (source >> shift) & 255;
+                    int b = (dest >> shift) & 255;
+                    blended |= ((a * alpha + b * (255 - alpha) + 127) / 255) << shift;
+                }
+                gHdHeadPixels[i] = blended;
+            }
+        }
+    }
     for (int row = 0; row < gHdHeadFrame->height; row++) {
         int destY = gHdHeadTop * 2 + row;
         if (destY < 0 || destY >= 400) continue;
@@ -5800,6 +5824,7 @@ static void gameDialogComposeHdHead()
 static void gameDialogUpdateHdHead(Art* headFrm, int frame, const HeadFrmId& headId, int x, int y)
 {
     gHdHeadFrame.reset();
+    gHdHeadBackground.reset();
     gHdHeadPixels.clear();
     gHdHeadDirty = false;
     if (headFrm == nullptr || !headId.valid() || !hdWorldActive()) return;
@@ -5823,6 +5848,7 @@ static void gameDialogUpdateHdHead(Art* headFrm, int frame, const HeadFrmId& hea
         || background.getWidth() != 388 || background.getHeight() != 200) return;
 
     const unsigned char* backgroundData = background.getData();
+    gHdHeadBackground = hdWorldGetFrame(gameDialogBackgroundFrmId, 0, ROTATION_NE, 388, 200);
     gHdHeadBase.assign(backgroundData, backgroundData + 388 * 200);
     const unsigned char* legacy = gameDialogDisplayBuffer;
     gHdHeadLegacy.resize(388 * 200);
