@@ -783,6 +783,45 @@ void handleWindowSizeChanged()
 
 static unsigned int gPresentedFrames = 0;
 
+// The game's cursor is in the indexed screen texture, below the HD portrait.
+// Redraw only its overlapping opaque pixels after the portrait.
+static void renderCursorOverHdHead(const SDL_FRect& head)
+{
+    const unsigned char* shape;
+    int pitch;
+    unsigned char transparent;
+    Rect cursor;
+    if (!mouseGetVisibleShape(&shape, &pitch, &transparent, &cursor)) return;
+    int left = std::max(cursor.left, static_cast<int>(head.x));
+    int top = std::max(cursor.top, static_cast<int>(head.y));
+    int right = std::min(cursor.right + 1, static_cast<int>(head.x + head.w));
+    int bottom = std::min(cursor.bottom + 1, static_cast<int>(head.y + head.h));
+    if (left >= right || top >= bottom) return;
+
+    Uint8 oldR, oldG, oldB, oldA;
+    SDL_BlendMode oldBlend;
+    SDL_GetRenderDrawColor(gSdlRenderer, &oldR, &oldG, &oldB, &oldA);
+    SDL_GetRenderDrawBlendMode(gSdlRenderer, &oldBlend);
+    SDL_SetRenderDrawBlendMode(gSdlRenderer, SDL_BLENDMODE_NONE);
+    const Uint32* palette = screenGetPalette();
+    for (int y = top; y < bottom; y++) {
+        for (int x = left; x < right;) {
+            unsigned char index = shape[(y - cursor.top) * pitch + x - cursor.left];
+            int end = x + 1;
+            while (end < right && shape[(y - cursor.top) * pitch + end - cursor.left] == index) end++;
+            if (index != transparent) {
+                Uint32 color = palette[index];
+                SDL_SetRenderDrawColor(gSdlRenderer, (color >> 16) & 255, (color >> 8) & 255, color & 255, 255);
+                SDL_Rect span = { x, y, end - x, 1 };
+                SDL_RenderFillRect(gSdlRenderer, &span);
+            }
+            x = end;
+        }
+    }
+    SDL_SetRenderDrawColor(gSdlRenderer, oldR, oldG, oldB, oldA);
+    SDL_SetRenderDrawBlendMode(gSdlRenderer, oldBlend);
+}
+
 void renderFpsCounter()
 {
     if (!settings.debug.show_fps || gSdlSurface == nullptr || gSdlTextureSurface == nullptr) {
@@ -883,6 +922,7 @@ void renderPresent()
                 SDL_FRect headRect = { static_cast<float>(background->rect.left + 126),
                     static_cast<float>(background->rect.top + 14 + gameDialogHdHeadYOffset()), 388.0f, 200.0f };
                 gameDialogDrawHdHead(gSdlRenderer, headRect);
+                renderCursorOverHdHead(headRect);
             }
         }
     }

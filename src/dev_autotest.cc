@@ -480,6 +480,7 @@ enum DevAutotestAction {
     // a - [graphics] dark_boost; logs the real and drawn ambient light.
     DEV_AUTOTEST_ACTION_SET_DARK_BOOST,
     DEV_AUTOTEST_ACTION_HD_MATRIX,
+    DEV_AUTOTEST_ACTION_HD_HEAD_CURSOR,
     DEV_AUTOTEST_ACTION_HD_DOOR,
     DEV_AUTOTEST_ACTION_HD_COUNTS,
     DEV_AUTOTEST_ACTION_HD_CHECK_DOOR,
@@ -1057,6 +1058,7 @@ static const DevAutotestStep kDevAutotestHdHeadsSteps[] = {
     { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 20, "heads00_map" },
     { DEV_AUTOTEST_ACTION_TALK_TO_PID, 13, 0, 0, 30, "heads01_open" },
     { DEV_AUTOTEST_ACTION_WAIT_TALKING, 900, 0, 0, 60, "heads02_fidget" },
+    { DEV_AUTOTEST_ACTION_HD_HEAD_CURSOR, 0, 0, 0, 2, "heads02a_cursor" },
     { DEV_AUTOTEST_ACTION_CHOOSE_OPTION, 0, 0, 0, 20, "heads03_reaction" },
     { DEV_AUTOTEST_ACTION_WAIT_TALKING, 600, 0, 0, 40, "heads04_lips" },
     { DEV_AUTOTEST_ACTION_CHOOSE_OPTION, 0, 0, 0, 20, "heads05_reply" },
@@ -4666,6 +4668,16 @@ void devAutotestTick()
             _mouse_set_position(static_cast<int>(step->a), static_cast<int>(step->b));
             gameMouseSetMode(GAME_MOUSE_MODE_ARROW);
             break;
+        case DEV_AUTOTEST_ACTION_HD_HEAD_CURSOR: {
+            Window* background = windowGetWindow(gameDialogGetBackgroundWindow());
+            if (!muiIsEnabled() && !touchControlsIsEnabled() && background != nullptr) {
+                gameMouseSetCursor(MOUSE_CURSOR_ARROW);
+                mouseHideCursor();
+                _mouse_set_position(background->rect.left + 300, background->rect.top + 100);
+                mouseShowCursor();
+            }
+            break;
+        }
         case DEV_AUTOTEST_ACTION_TALK_PARTY_MEMBER: {
             Object* member = nullptr;
             for (Object* candidate : get_all_party_members_objects(false)) {
@@ -7510,11 +7522,48 @@ void devAutotestCapture(SDL_Renderer* renderer)
         return;
     }
 
+    if (strcmp(name, "heads02a_cursor") == 0 && !muiIsEnabled() && !touchControlsIsEnabled()) {
+        const unsigned char* shape = nullptr;
+        int pitch = 0;
+        unsigned char transparent = 0;
+        Rect cursor;
+        int logicalWidth = 0, logicalHeight = 0;
+        SDL_RenderGetLogicalSize(renderer, &logicalWidth, &logicalHeight);
+        int checked = 0, matched = 0;
+        if (logicalWidth > 0 && logicalHeight > 0 && mouseGetVisibleShape(&shape, &pitch, &transparent, &cursor)) {
+            const Uint32* palette = screenGetPalette();
+            for (int y = 0; y <= cursor.bottom - cursor.top; y++) {
+                for (int x = 0; x <= cursor.right - cursor.left; x++) {
+                    unsigned char index = shape[y * pitch + x];
+                    if (index == transparent) continue;
+                    int px = static_cast<int>((cursor.left + x + 0.5) * width / logicalWidth);
+                    int py = static_cast<int>((cursor.top + y + 0.5) * height / logicalHeight);
+                    if (px < 0 || px >= width || py < 0 || py >= height) continue;
+                    const unsigned char* actual = pixels.data() + (static_cast<size_t>(py) * width + px) * 4;
+                    Uint32 expected = palette[index];
+                    checked++;
+                    if (std::abs(actual[0] - static_cast<int>((expected >> 16) & 255)) <= 2
+                        && std::abs(actual[1] - static_cast<int>((expected >> 8) & 255)) <= 2
+                        && std::abs(actual[2] - static_cast<int>(expected & 255)) <= 2) matched++;
+                }
+            }
+        }
+        devAutotestLog("HD head cursor readback: %d/%d opaque pixels match\n", matched, checked);
+        if (checked == 0 || matched * 4 < checked * 3) {
+            devAutotestLog("autotest failed: cursor obscured by HD head\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
     if (gDevAutotestHdHeads && gameDialogIsTalking()) {
         double hdError, legacyError;
         gameDialogHdReadbackMetrics(pixels.data(), width, height, &hdError, &legacyError);
         devAutotestLog("%s: HD head readback hd_error=%.2f legacy_error=%.2f cache=%zu\n",
             name, hdError, legacyError, hdWorldCacheBytes());
+        if (strcmp(name, "heads_missing") == 0 && (legacyError < 0 || legacyError > 10.0)) {
+            devAutotestLog("autotest failed: missing head frame did not display the indexed fallback\n");
+            exit(EXIT_FAILURE);
+        }
         if (settings.graphics.hd_art && gameDialogHasHdHead()
             && (hdError < 0 || hdError > 45.0 || hdError >= legacyError)) {
             devAutotestLog("autotest failed: HD head pixels did not reach the head rectangle\n");

@@ -47,6 +47,8 @@ void _mouse_simulate_input(int delta_x, int delta_y, int buttons);
 bool _mouse_in(int left, int top, int right, int bottom);
 bool _mouse_click_in(int left, int top, int right, int bottom);
 void mouseGetRect(Rect* rect);
+// Indexed cursor shape, only when the cursor is actually visible.
+bool mouseGetVisibleShape(const unsigned char** pixels, int* pitch, unsigned char* transparent, Rect* rect);
 void mouseGetPosition(int* out_x, int* out_y);
 void _mouse_set_position(int x, int y);
 

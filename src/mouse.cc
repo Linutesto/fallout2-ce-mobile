@@ -1048,6 +1048,25 @@ void mouseGetRect(Rect* rect)
     rect->bottom = gMouseCursorHeight + gMouseCursorY - 1;
 }
 
+bool mouseGetVisibleShape(const unsigned char** pixels, int* pitch, unsigned char* transparent, Rect* rect)
+{
+#if FALLOUT_TOUCH_ONLY
+    (void)pixels;
+    (void)pitch;
+    (void)transparent;
+    (void)rect;
+    return false;
+#else
+    if (!gMouseInitialized || gCursorIsHidden || _mouse_shape == nullptr
+        || (touchControlsIsEnabled() && !gTouchCursorVisible)) return false;
+    *pixels = _mouse_shape;
+    *pitch = gMouseCursorPitch;
+    *transparent = static_cast<unsigned char>(_mouse_trans);
+    mouseGetRect(rect);
+    return true;
+#endif
+}
+
 // 0x4CA9DC
 void mouseGetPosition(int* xPtr, int* yPtr)
 {
