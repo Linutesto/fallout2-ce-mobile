@@ -51,7 +51,7 @@ namespace {
         if (picture != InterfaceFrameId::Invalid) {
             int width;
             int height;
-            SDL_Texture* texture = muiHdPictureTexture(FrmId(picture), &width, &height);
+            SDL_Texture* texture = muiPictureTexture(FrmId(picture), &width, &height);
             if (texture != nullptr) {
                 shown = muiFitRect(screen, static_cast<float>(width), static_cast<float>(height));
                 muiDrawTexture(texture, shown);
