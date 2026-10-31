@@ -98,8 +98,9 @@ float muiFitTextSize(const std::u32string& text, float width, float size, float 
 // Game art frame as texture in the current game palette (color 0 is
 // transparent), scaled with nearest filtering to keep pixel art crisp.
 SDL_Texture* muiArtTexture(const FrmId& frmId, int frame, int* width, int* height, int rotation = 0);
-// Inventory art retains its original logical dimensions when an HD frame is used.
-SDL_Texture* muiItemArtTexture(const FrmId& frmId, int frame, int* width, int* height);
+// Retains original logical dimensions when an HD frame is used; falls back to
+// the indexed frame if no valid HD image or renderer texture is available.
+SDL_Texture* muiHdArtTexture(const FrmId& frmId, int frame, int* width, int* height);
 // Painted picture (portraits, menu art) as `muiArtTexture` (first frame),
 // smooth scaling: it's shown much larger than drawn.
 SDL_Texture* muiPictureTexture(const FrmId& frmId, int* width, int* height);

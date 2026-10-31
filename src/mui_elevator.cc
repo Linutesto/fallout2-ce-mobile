@@ -151,7 +151,7 @@ namespace {
 
         int width;
         int height;
-        SDL_Texture* background = muiArtTexture(FrmId(view.background), 0, &width, &height);
+        SDL_Texture* background = muiHdArtTexture(FrmId(view.background), 0, &width, &height);
         if (background == nullptr || width <= 0 || height <= 0) {
             // Nothing to show: stay, as the game does without its art.
             finished = true;
@@ -194,7 +194,7 @@ namespace {
         if (view.panel != InterfaceFrameId::Invalid) {
             int panelWidth;
             int panelHeight;
-            SDL_Texture* texture = muiArtTexture(FrmId(view.panel), 0, &panelWidth, &panelHeight);
+            SDL_Texture* texture = muiHdArtTexture(FrmId(view.panel), 0, &panelWidth, &panelHeight);
             if (texture != nullptr) {
                 muiDrawTexture(texture, art(0.0f, static_cast<float>(height - panelHeight), static_cast<float>(panelWidth), static_cast<float>(panelHeight)));
             }
@@ -212,7 +212,7 @@ namespace {
 
         int buttonWidth;
         int buttonHeight;
-        SDL_Texture* pressedButton = muiArtTexture(FrmId(InterfaceFrameId::MapElevatorButtonIn), 0, &buttonWidth, &buttonHeight);
+        SDL_Texture* pressedButton = muiHdArtTexture(FrmId(InterfaceFrameId::MapElevatorButtonIn), 0, &buttonWidth, &buttonHeight);
         for (int level = 0; level < view.levels; level++) {
             float y = static_cast<float>(kButtonY + kButtonStep * level);
             MuiRect button = art(static_cast<float>(kButtonX), y, static_cast<float>(buttonWidth), static_cast<float>(buttonHeight));

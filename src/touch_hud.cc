@@ -712,7 +712,7 @@ namespace {
         if (info.itemFrmId.valid()) {
             int width;
             int height;
-            SDL_Texture* texture = muiItemArtTexture(info.itemFrmId, 0, &width, &height);
+            SDL_Texture* texture = muiHdArtTexture(info.itemFrmId, 0, &width, &height);
             if (texture != nullptr) {
                 muiDrawTexture(texture, muiFitRect(content, static_cast<float>(width), static_cast<float>(height)), { 255, 255, 255, alpha });
             }
