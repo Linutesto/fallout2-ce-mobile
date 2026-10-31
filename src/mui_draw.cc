@@ -13,6 +13,8 @@
 #include "db.h"
 #include "debug.h"
 #include "game_charset.h"
+#include "hd_art.h"
+#include "hd_world.h"
 #include "mui_icons.h"
 #include "svga.h"
 
@@ -81,6 +83,16 @@ namespace {
 
     // By fid and frame.
     std::map<std::pair<int, int>, ArtTexture> gArtTextures;
+
+    struct HdItemTexture {
+        SDL_Texture* texture = nullptr;
+        size_t bytes = 0;
+        unsigned int lastUsed = 0;
+    };
+    // Bound renderer allocations separately from the shared decoded-image LRU.
+    constexpr size_t kHdItemTextureBudget = 16 * 1024 * 1024;
+    std::map<std::pair<int, int>, HdItemTexture> gHdItemTextures;
+    size_t gHdItemTextureBytes = 0;
 
     // Painted pictures by fid.
     // Named FRMs all have the same empty FID. Own the path in the key and
@@ -343,6 +355,12 @@ SDL_BlendMode muiPremultipliedBlendMode()
 void muiDrawReset()
 {
     gDrawGeneration++;
+
+    for (auto& entry : gHdItemTextures) {
+        SDL_DestroyTexture(entry.second.texture);
+    }
+    gHdItemTextures.clear();
+    gHdItemTextureBytes = 0;
 
     for (auto& entry : gIndexedTextures) {
         if (entry.second.base.texture != nullptr) {
@@ -834,6 +852,50 @@ SDL_Texture* muiArtTexture(const FrmId& frmId, int frame, int* width, int* heigh
     *width = artWidth;
     *height = artHeight;
     return entry.texture;
+}
+
+SDL_Texture* muiItemArtTexture(const FrmId& frmId, int frame, int* width, int* height)
+{
+    SDL_Texture* fallback = muiArtTexture(frmId, frame, width, height);
+    if (fallback == nullptr || !hdWorldActive()) {
+        return fallback;
+    }
+
+    auto key = std::make_pair(frmId.fid(), frame);
+    auto found = gHdItemTextures.find(key);
+    if (found != gHdItemTextures.end()) {
+        found->second.lastUsed = gFrame;
+        return found->second.texture;
+    }
+    auto image = hdWorldGetFrame(frmId, frame, ROTATION_NE, *width, *height);
+    if (!image) {
+        return fallback;
+    }
+    size_t bytes = image->pixels.size() * sizeof(uint32_t);
+    if (bytes > kHdItemTextureBudget) {
+        return fallback;
+    }
+    SDL_Texture* texture = SDL_CreateTexture(gRenderer, SDL_PIXELFORMAT_ARGB8888,
+        SDL_TEXTUREACCESS_STATIC, image->width, image->height);
+    if (texture == nullptr) {
+        return fallback;
+    }
+    if (SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND) != 0
+        || SDL_SetTextureScaleMode(texture, SDL_ScaleModeNearest) != 0
+        || SDL_UpdateTexture(texture, nullptr, image->pixels.data(), image->width * 4) != 0) {
+        SDL_DestroyTexture(texture);
+        return fallback;
+    }
+    while (!gHdItemTextures.empty() && gHdItemTextureBytes + bytes > kHdItemTextureBudget) {
+        auto oldest = std::min_element(gHdItemTextures.begin(), gHdItemTextures.end(),
+            [](const auto& a, const auto& b) { return a.second.lastUsed < b.second.lastUsed; });
+        gHdItemTextureBytes -= oldest->second.bytes;
+        SDL_DestroyTexture(oldest->second.texture);
+        gHdItemTextures.erase(oldest);
+    }
+    gHdItemTextures.emplace(key, HdItemTexture { texture, bytes, gFrame });
+    gHdItemTextureBytes += bytes;
+    return texture;
 }
 
 SDL_Texture* muiPictureTexture(const FrmId& frmId, int* width, int* height)

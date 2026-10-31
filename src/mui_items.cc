@@ -146,7 +146,7 @@ void muiDrawItemImage(MuiContext& ui, const MuiRect& rect, Object* item, bool pr
 
     int width;
     int height;
-    SDL_Texture* texture = muiArtTexture(itemGetInventoryFrmId(item), 0, &width, &height);
+    SDL_Texture* texture = muiItemArtTexture(itemGetInventoryFrmId(item), 0, &width, &height);
     if (texture != nullptr && width > 0 && height > 0) {
         // Integer scale keeps pixels even, smaller art is fitted.
         MuiRect area = rect.inset(ui.dp(4.0f));

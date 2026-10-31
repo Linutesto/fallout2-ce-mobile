@@ -491,7 +491,7 @@ namespace {
         if (item != nullptr) {
             int width;
             int height;
-            SDL_Texture* texture = muiArtTexture(itemGetInventoryFrmId(item), 0, &width, &height);
+            SDL_Texture* texture = muiItemArtTexture(itemGetInventoryFrmId(item), 0, &width, &height);
             if (texture != nullptr) {
                 muiDrawTexture(texture, muiFitRect(art, static_cast<float>(width), static_cast<float>(height)));
             }
