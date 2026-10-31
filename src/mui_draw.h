@@ -108,6 +108,7 @@ SDL_Texture* muiHdPictureTexture(const FrmId& frmId, int* width, int* height);
 // Line drawing (skilldex pictures: dark ink on paper) as a white texture of
 // the ink only, drawn tinted with `muiDrawTexture`; smooth scaling.
 SDL_Texture* muiLineArtTexture(const FrmId& frmId, int* width, int* height);
+SDL_Texture* muiHdLineArtTexture(const FrmId& frmId, int* width, int* height);
 void muiDrawTexture(SDL_Texture* texture, const MuiRect& rect, MuiColor tint = { 255, 255, 255, 255 });
 // Draws the part [source] (texture pixels) of the texture over [rect].
 void muiDrawTexturePart(SDL_Texture* texture, const SDL_Rect& source, const MuiRect& rect, MuiColor tint = { 255, 255, 255, 255 });

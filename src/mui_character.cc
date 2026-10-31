@@ -1138,7 +1138,7 @@ namespace {
         float y = content.y;
         int width;
         int height;
-        SDL_Texture* picture = card.frmId.fid() != -1 ? muiLineArtTexture(card.frmId, &width, &height) : nullptr;
+        SDL_Texture* picture = card.frmId.fid() != -1 ? muiHdLineArtTexture(card.frmId, &width, &height) : nullptr;
         if (picture != nullptr) {
             float pictureHeight = std::min(content.w * height / width, content.h * 0.42f);
             MuiRect pictureRect = muiFitRect({ content.x, y, content.w, pictureHeight }, static_cast<float>(width), static_cast<float>(height));

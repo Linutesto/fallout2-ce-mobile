@@ -91,7 +91,7 @@ namespace {
     };
     // Bound renderer allocations separately from the shared decoded-image LRU.
     constexpr size_t kHdUiTextureBudget = 16 * 1024 * 1024;
-    std::map<std::pair<int, int>, HdUiTexture> gHdUiTextures;
+    std::map<std::tuple<int, int, bool>, HdUiTexture> gHdUiTextures;
     size_t gHdUiTextureBytes = 0;
 
     // Painted pictures by fid.
@@ -854,13 +854,13 @@ SDL_Texture* muiArtTexture(const FrmId& frmId, int frame, int* width, int* heigh
     return entry.texture;
 }
 
-static SDL_Texture* muiHdTexture(const FrmId& frmId, int frame, int width, int height, SDL_Texture* fallback)
+static SDL_Texture* muiHdTexture(const FrmId& frmId, int frame, int width, int height, SDL_Texture* fallback, bool ink = false)
 {
     if (fallback == nullptr || !frmId.hasFid() || !hdWorldActive()) {
         return fallback;
     }
 
-    auto key = std::make_pair(frmId.fid(), frame);
+    auto key = std::make_tuple(frmId.fid(), frame, ink);
     auto found = gHdUiTextures.find(key);
     if (found != gHdUiTextures.end()) {
         found->second.lastUsed = gFrame;
@@ -879,9 +879,23 @@ static SDL_Texture* muiHdTexture(const FrmId& frmId, int frame, int width, int h
     if (texture == nullptr) {
         return fallback;
     }
+    std::vector<uint32_t> inkPixels;
+    const uint32_t* pixels = image->pixels.data();
+    if (ink) {
+        inkPixels.resize(image->pixels.size());
+        for (size_t i = 0; i < inkPixels.size(); i++) {
+            uint32_t pixel = image->pixels[i];
+            float luminance = 0.299f * ((pixel >> 16) & 255)
+                + 0.587f * ((pixel >> 8) & 255) + 0.114f * (pixel & 255);
+            float coverage = std::clamp((72.0f - luminance) / 45.0f, 0.0f, 1.0f);
+            unsigned int alpha = static_cast<unsigned int>(((pixel >> 24) & 255) * coverage + 0.5f);
+            inkPixels[i] = (alpha << 24) | 0x00FFFFFF;
+        }
+        pixels = inkPixels.data();
+    }
     if (SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND) != 0
-        || SDL_SetTextureScaleMode(texture, SDL_ScaleModeNearest) != 0
-        || SDL_UpdateTexture(texture, nullptr, image->pixels.data(), image->width * 4) != 0) {
+        || SDL_SetTextureScaleMode(texture, ink ? SDL_ScaleModeLinear : SDL_ScaleModeNearest) != 0
+        || SDL_UpdateTexture(texture, nullptr, pixels, image->width * 4) != 0) {
         SDL_DestroyTexture(texture);
         return fallback;
     }
@@ -1020,6 +1034,12 @@ SDL_Texture* muiLineArtTexture(const FrmId& frmId, int* width, int* height)
     *width = artWidth;
     *height = artHeight;
     return entry.texture;
+}
+
+SDL_Texture* muiHdLineArtTexture(const FrmId& frmId, int* width, int* height)
+{
+    SDL_Texture* fallback = muiLineArtTexture(frmId, width, height);
+    return fallback != nullptr ? muiHdTexture(frmId, 0, *width, *height, fallback, true) : nullptr;
 }
 
 void muiDrawTexture(SDL_Texture* texture, const MuiRect& rect, MuiColor tint)
