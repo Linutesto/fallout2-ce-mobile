@@ -5683,8 +5683,14 @@ static void gameDialogUpdateHdHead(Art* headFrm, int frame, const HeadFrmId& hea
     int width = artGetWidth(headFrm, frame);
     int height = artGetHeight(headFrm, frame);
     auto image = hdWorldGetFrame(headId, frame, ROTATION_NE, width, height);
+    static int hdHeadTraceCount = 0;
+    if (devAutotestIsEnabled() && hdHeadTraceCount++ < 24)
+        devAutotestNote("HD head lookup %s frame=%d found=%d\n",
+            headId.filePath(), frame, image != nullptr);
     if (!image) {
         gHdHeadFallbackCount++;
+        if (devAutotestHdHeadsFallback() && gHdHeadFallbackCount == 1)
+            devAutotestCaptureNextFrame("heads_missing");
         return;
     }
 

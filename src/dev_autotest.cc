@@ -1051,6 +1051,25 @@ static const DevAutotestStep kDevAutotestHeadTraceSteps[] = {
     { DEV_AUTOTEST_ACTION_LOG_NEW_WINDOWS, 0, 0, 0, 1, "h99_windows" },
 };
 
+// Short Elder dialogue: idle fidget, the first answer's reaction, voiced
+// reply/lips, another answer, then goodbye and a clean map frame.
+static const DevAutotestStep kDevAutotestHdHeadsSteps[] = {
+    { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 20, "heads00_map" },
+    { DEV_AUTOTEST_ACTION_TALK_TO_PID, 13, 0, 0, 30, "heads01_open" },
+    { DEV_AUTOTEST_ACTION_WAIT_TALKING, 900, 0, 0, 60, "heads02_fidget" },
+    { DEV_AUTOTEST_ACTION_CHOOSE_OPTION, 0, 0, 0, 20, "heads03_reaction" },
+    { DEV_AUTOTEST_ACTION_WAIT_TALKING, 600, 0, 0, 40, "heads04_lips" },
+    { DEV_AUTOTEST_ACTION_CHOOSE_OPTION, 0, 0, 0, 20, "heads05_reply" },
+    { DEV_AUTOTEST_ACTION_WAIT_TALKING, 600, 0, 0, 40, "heads06_talking" },
+    { DEV_AUTOTEST_ACTION_CHOOSE_OPTION, 1, 0, 0, 20, "heads07_help" },
+    { DEV_AUTOTEST_ACTION_WAIT_TALKING, 600, 0, 0, 40, "heads08_help" },
+    { DEV_AUTOTEST_ACTION_CHOOSE_OPTION, 3, 0, 0, 20, "heads09_goodbye" },
+    { DEV_AUTOTEST_ACTION_ASSERT_TALK_CLOSED, 0, 0, 0, 10, "heads10_closed" },
+};
+static bool gDevAutotestHdHeads = false;
+static bool gDevAutotestHdHeadsFallback = false;
+bool devAutotestHdHeadsFallback() { return gDevAutotestHdHeadsFallback; }
+
 // Barter with Clint (at the new game's start) by the mobile UI's way or the
 // game's windows; the logs are compared.
 static const DevAutotestStep kDevAutotestBarterTraceSteps[] = {
@@ -3108,6 +3127,11 @@ void devAutotestSetScenario(const char* name)
     } else if (strcmp(name, "hd-dark") == 0) {
         gDevAutotestSteps = kDevAutotestHdDarkSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestHdDarkSteps) / sizeof(kDevAutotestHdDarkSteps[0]);
+    } else if (strcmp(name, "hd-heads") == 0 || strcmp(name, "hd-heads-fallback") == 0) {
+        gDevAutotestSteps = kDevAutotestHdHeadsSteps;
+        gDevAutotestStepCount = sizeof(kDevAutotestHdHeadsSteps) / sizeof(kDevAutotestHdHeadsSteps[0]);
+        gDevAutotestHdHeads = true;
+        gDevAutotestHdHeadsFallback = strcmp(name, "hd-heads-fallback") == 0;
     } else if (strcmp(name, "graphics") == 0) {
         gDevAutotestSteps = kDevAutotestGraphicsSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestGraphicsSteps) / sizeof(kDevAutotestGraphicsSteps[0]);
@@ -4381,6 +4405,21 @@ void devAutotestTick()
     }
 
     if (gDevAutotestStep >= gDevAutotestStepCount) {
+        if (gDevAutotestHdHeads) {
+            size_t compositionBytes = 0, cacheBytes = 0;
+            unsigned long long frames = 0;
+            gameDialogHdStats(&compositionBytes, &cacheBytes, &frames);
+            devAutotestLog("HD heads frames=%llu fallback=%llu composition_bytes=%zu cache_bytes=%zu\n",
+                frames, gameDialogHdFallbackFrames(), compositionBytes, cacheBytes);
+            if (settings.graphics.hd_art && (frames == 0 || (gDevAutotestHdHeadsFallback && gameDialogHdFallbackFrames() == 0))) {
+                devAutotestLog("autotest failed: HD head frame or fallback was never exercised\n");
+                exit(EXIT_FAILURE);
+            }
+            if (gameDialogHasHdHead() || gameDialogIsTalking()) {
+                devAutotestLog("autotest failed: stale head after dialogue\n");
+                exit(EXIT_FAILURE);
+            }
+        }
         if (gDevAutotestSteps == kDevAutotestHdSteps || gDevAutotestSteps == kDevAutotestHdDarkSteps)
             devAutotestHdGameplay();
         if (settings.graphics.hd_renderer == "gpu") devAutotestLogGpuStats("scenario_end");
@@ -7428,6 +7467,10 @@ void devAutotestCapture(SDL_Renderer* renderer)
 
     const char* name = gDevAutotestPendingCapture;
     gDevAutotestPendingCapture = nullptr;
+    if (strcmp(name, "heads_missing") == 0 && gameDialogHasHdHead()) {
+        devAutotestLog("autotest failed: stale HD head on missing-frame fallback\n");
+        exit(EXIT_FAILURE);
+    }
 
 #ifndef __ANDROID__
     // These captures follow real actor animation, highlight and combat draws.
@@ -7461,6 +7504,18 @@ void devAutotestCapture(SDL_Renderer* renderer)
     if (SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ABGR8888, pixels.data(), width * 4) != 0) {
         devAutotestLog("%s: read pixels failed: %s\n", name, SDL_GetError());
         return;
+    }
+
+    if (gDevAutotestHdHeads && gameDialogIsTalking()) {
+        double hdError, legacyError;
+        gameDialogHdReadbackMetrics(pixels.data(), width, height, &hdError, &legacyError);
+        devAutotestLog("%s: HD head readback hd_error=%.2f legacy_error=%.2f cache=%zu\n",
+            name, hdError, legacyError, hdWorldCacheBytes());
+        if (settings.graphics.hd_art && gameDialogHasHdHead()
+            && (hdError < 0 || hdError > 45.0 || hdError >= legacyError)) {
+            devAutotestLog("autotest failed: HD head pixels did not reach the head rectangle\n");
+            exit(EXIT_FAILURE);
+        }
     }
 
     std::string path = gDevAutotestOutputPath + "/" + name + ".png";

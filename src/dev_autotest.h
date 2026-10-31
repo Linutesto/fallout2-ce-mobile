@@ -22,6 +22,7 @@ extern void (*gDevAutotestInvenWieldObserver)(Object* critter, Object* item, int
 // checks the map, inventory and combat.
 void devAutotestSetScenario(const char* name);
 bool devAutotestIsEnabled();
+bool devAutotestHdHeadsFallback();
 
 // Advances the script, called once per main loop iteration.
 void devAutotestTick();
