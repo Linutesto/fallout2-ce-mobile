@@ -1068,6 +1068,21 @@ static const DevAutotestStep kDevAutotestHdHeadsSteps[] = {
     { DEV_AUTOTEST_ACTION_CHOOSE_OPTION, 3, 0, 0, 20, "heads09_goodbye" },
     { DEV_AUTOTEST_ACTION_ASSERT_TALK_CLOSED, 0, 0, 0, 10, "heads10_closed" },
 };
+static const DevAutotestStep kDevAutotestHdHeadsReviewSteps[] = {
+    { DEV_AUTOTEST_ACTION_NONE, 0, 0, 0, 20, "review00_map" },
+    { DEV_AUTOTEST_ACTION_TALK_TO_PID, 13, 0, 0, 30, "review01_open" },
+    { DEV_AUTOTEST_ACTION_WAIT_TALKING, 900, 0, 0, 30, "review02_talking" },
+    { DEV_AUTOTEST_ACTION_CHOOSE_OPTION, 0, 0, 0, 20, "review03_reaction" },
+    { DEV_AUTOTEST_ACTION_WAIT_TALKING, 600, 0, 0, 20, "review04_reply" },
+    { DEV_AUTOTEST_ACTION_MUI_TAP, 0, 0, 0, 20, "review05_open", "dialog.tab.review" },
+    { DEV_AUTOTEST_ACTION_BACK, 0, 0, 0, 20, "review06_closed" },
+    { DEV_AUTOTEST_ACTION_CHOOSE_OPTION, 0, 0, 0, 20, "review07_reply" },
+    { DEV_AUTOTEST_ACTION_WAIT_TALKING, 600, 0, 0, 20, "review08_talking" },
+    { DEV_AUTOTEST_ACTION_CHOOSE_OPTION, 1, 0, 0, 20, "review09_help" },
+    { DEV_AUTOTEST_ACTION_WAIT_TALKING, 600, 0, 0, 20, "review10_talking" },
+    { DEV_AUTOTEST_ACTION_CHOOSE_OPTION, 3, 0, 0, 20, "review11_goodbye" },
+    { DEV_AUTOTEST_ACTION_ASSERT_TALK_CLOSED, 0, 0, 0, 10, "review12_map" },
+};
 static bool gDevAutotestHdHeads = false;
 static bool gDevAutotestHdHeadsFallback = false;
 static bool gDevAutotestHdHeadsBench = false;
@@ -3130,6 +3145,10 @@ void devAutotestSetScenario(const char* name)
     } else if (strcmp(name, "hd-dark") == 0) {
         gDevAutotestSteps = kDevAutotestHdDarkSteps;
         gDevAutotestStepCount = sizeof(kDevAutotestHdDarkSteps) / sizeof(kDevAutotestHdDarkSteps[0]);
+    } else if (strcmp(name, "hd-heads-review") == 0) {
+        gDevAutotestSteps = kDevAutotestHdHeadsReviewSteps;
+        gDevAutotestStepCount = sizeof(kDevAutotestHdHeadsReviewSteps) / sizeof(kDevAutotestHdHeadsReviewSteps[0]);
+        gDevAutotestHdHeads = true;
     } else if (strcmp(name, "hd-heads") == 0 || strcmp(name, "hd-heads-fallback") == 0
         || strcmp(name, "hd-heads-bench") == 0) {
         gDevAutotestSteps = kDevAutotestHdHeadsSteps;
