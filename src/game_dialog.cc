@@ -5722,6 +5722,33 @@ static void gameDialogComposeHdHead()
             }
         }
     }
+    // The original window redraws its keyed monitor bezel over every head
+    // frame. Restore those pixels after the HD image, including its rounded
+    // corners, so the portrait has exactly the original clipping shape.
+    for (int index = 0; index < 8; index++) {
+        if (_backgrndBufs[index] == nullptr) continue;
+        Rect rect = gameDialogGetBackgroundRect(index);
+        int width = rect.right - rect.left;
+        int height = rect.bottom - rect.top;
+        int left = rect.left - 126;
+        int top = rect.top - (14 + gameDialogHrArtYOffset());
+        for (int row = 0; row < height; row++) {
+            int y = top + row;
+            if (y < 0 || y >= 200) continue;
+            for (int col = 0; col < width; col++) {
+                int x = left + col;
+                if (x < 0 || x >= 388) continue;
+                unsigned char colorIndex = _backgrndBufs[index][row * width + col];
+                if (colorIndex == 0) continue;
+                uint32_t color = palette[colorIndex];
+                int offset = y * 2 * 776 + x * 2;
+                gHdHeadPixels[offset] = color;
+                gHdHeadPixels[offset + 1] = color;
+                gHdHeadPixels[offset + 776] = color;
+                gHdHeadPixels[offset + 777] = color;
+            }
+        }
+    }
     gHdHeadDirty = true;
 }
 
@@ -5772,7 +5799,18 @@ int gameDialogHdHeadYOffset() { return gameDialogHrArtYOffset(); }
 
 void gameDialogDrawHdHead(SDL_Renderer* renderer, const SDL_FRect& rect)
 {
-    if (!gameDialogHasHdHead() || renderer == nullptr) return;
+    if (renderer == nullptr) return;
+    bool hasHd = gameDialogHasHdHead();
+    if (!hasHd && !devAutotestHdHeadsFallback()) return;
+    // Remember the actual presentation coordinates even for a missing frame;
+    // the autotest also reads back the indexed fallback through this path.
+    gHdHeadLastRect = rect;
+    int logicalWidth = 0, logicalHeight = 0, outputWidth = 0, outputHeight = 0;
+    SDL_RenderGetLogicalSize(renderer, &logicalWidth, &logicalHeight);
+    SDL_GetRendererOutputSize(renderer, &outputWidth, &outputHeight);
+    gHdHeadDrawScaleX = logicalWidth > 0 ? static_cast<double>(outputWidth) / logicalWidth : 1.0;
+    gHdHeadDrawScaleY = logicalHeight > 0 ? static_cast<double>(outputHeight) / logicalHeight : 1.0;
+    if (!hasHd) return;
     if (memcmp(gHdHeadPalette, screenGetPalette(), sizeof(gHdHeadPalette)) != 0)
         gameDialogComposeHdHead();
     if (gHdHeadTexture == nullptr) {
@@ -5787,14 +5825,7 @@ void gameDialogDrawHdHead(SDL_Renderer* renderer, const SDL_FRect& rect)
         if (SDL_UpdateTexture(gHdHeadTexture, nullptr, gHdHeadPixels.data(), 776 * 4) != 0) return;
         gHdHeadDirty = false;
     }
-    if (SDL_RenderCopyF(renderer, gHdHeadTexture, nullptr, &rect) == 0) {
-        gHdHeadLastRect = rect;
-        int logicalWidth = 0, logicalHeight = 0, outputWidth = 0, outputHeight = 0;
-        SDL_RenderGetLogicalSize(renderer, &logicalWidth, &logicalHeight);
-        SDL_GetRendererOutputSize(renderer, &outputWidth, &outputHeight);
-        gHdHeadDrawScaleX = logicalWidth > 0 ? static_cast<double>(outputWidth) / logicalWidth : 1.0;
-        gHdHeadDrawScaleY = logicalHeight > 0 ? static_cast<double>(outputHeight) / logicalHeight : 1.0;
-    }
+    SDL_RenderCopyF(renderer, gHdHeadTexture, nullptr, &rect);
 }
 
 void gameDialogResetHdRenderer()
@@ -5818,8 +5849,9 @@ void gameDialogHdReadbackMetrics(const unsigned char* rgba, int width, int heigh
     double* hdError, double* legacyError)
 {
     *hdError = *legacyError = -1.0;
-    if (!gameDialogHasHdHead() || rgba == nullptr || width <= 0 || height <= 0
+    if (!gameDialogIsTalking() || gameDialogDisplayBuffer == nullptr || rgba == nullptr || width <= 0 || height <= 0
         || gHdHeadLastRect.w <= 0 || gHdHeadLastRect.h <= 0) return;
+    bool hasHd = gameDialogHasHdHead();
     double sx = gHdHeadDrawScaleX;
     double sy = gHdHeadDrawScaleY;
     devAutotestNote("HD head rect %.1f,%.1f %.1fx%.1f output %dx%d scale %.2f,%.2f\n",
@@ -5835,7 +5867,7 @@ void gameDialogHdReadbackMetrics(const unsigned char* rgba, int width, int heigh
             int px = static_cast<int>((gHdHeadLastRect.x + u * gHdHeadLastRect.w) * sx);
             int py = static_cast<int>((gHdHeadLastRect.y + v * gHdHeadLastRect.h) * sy);
             if (px < 0 || px >= width || py < 0 || py >= height) continue;
-            uint32_t hd = gHdHeadPixels[static_cast<int>(v * 399) * 776 + static_cast<int>(u * 775)];
+            uint32_t hd = hasHd ? gHdHeadPixels[static_cast<int>(v * 399) * 776 + static_cast<int>(u * 775)] : 0;
             uint32_t legacy = palette[gameDialogDisplayBuffer[static_cast<int>(v * 199) * 640 + static_cast<int>(u * 387)]];
             const unsigned char* actual = rgba + (static_cast<size_t>(py) * width + px) * 4;
             for (int channel = 0; channel < 3; channel++) {
@@ -5847,7 +5879,7 @@ void gameDialogHdReadbackMetrics(const unsigned char* rgba, int width, int heigh
         }
     }
     if (samples) {
-        *hdError = hdTotal / samples;
+        if (hasHd) *hdError = hdTotal / samples;
         *legacyError = legacyTotal / samples;
     }
 }
