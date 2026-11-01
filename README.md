@@ -8,20 +8,15 @@ This is an **unofficial, fan-made, modified version** of Fallout 2 CE. It is not
 
 ## Wasteland Reborn
 
-This engine ships in **Wasteland Reborn** — the packaged release of
-Fallout 2 (Restoration Project + touch UI + optional AI NPCs) for Windows
-and Android. If you are here to **install and play**, you don't need to
-build anything: the guides take you through every step, one action at a
-time, quoting each button and menu as the program shows it:
+This engine is included in **Wasteland Reborn v1.4**, a packaged Fallout 2 release for Windows and Android with the Restoration Project (RPU), touch controls and optional AI NPCs through Ollama. Android requires 7.0 or newer and arm64. The classic APK is 5.2 MB; the HD APK is 3.7 MB. The apps are named **Wasteland** and **Wasteland HD**. Installing an update over the same app keeps saves; the two editions can coexist.
 
-- [Windows install guide (English)](https://github.com/Linutesto/wasteland-reborn-installer/blob/main/docs/INSTALL-WINDOWS.md)
-- [Guide Windows (en français)](https://github.com/Linutesto/wasteland-reborn-installer/blob/main/docs/INSTALL-WINDOWS.fr.md)
-- [Troubleshooting (English)](https://github.com/Linutesto/wasteland-reborn-installer/blob/main/docs/TROUBLESHOOTING.md)
-  · [Dépannage (français)](https://github.com/Linutesto/wasteland-reborn-installer/blob/main/docs/TROUBLESHOOTING.fr.md)
-- [Linux install guide (English)](https://github.com/Linutesto/wasteland-reborn-installer/blob/main/docs/INSTALL-LINUX.md)
+Fallout 2 is not included: bring your own copy. This is an unofficial fan project. For players, the installer repository is the single download and installation entry point:
 
-Releases and APKs:
-[wasteland-reborn-installer](https://github.com/Linutesto/wasteland-reborn-installer/releases/latest).
+- [Wasteland Reborn — downloads and player guides](https://github.com/Linutesto/wasteland-reborn-installer#download)
+- [Windows installation guide](https://github.com/Linutesto/wasteland-reborn-installer/blob/main/docs/INSTALL-WINDOWS.md)
+- [Linux installation guide](https://github.com/Linutesto/wasteland-reborn-installer/blob/main/docs/INSTALL-LINUX.md) (real-phone installation from Linux has not been tested)
+
+The optional HD packs download about 910 MB and use about 2 GB unpacked with the game; keep at least 3 GB free. Critter art is in production; the first pack is not published and no date is promised.
 
 ## Screenshots
 
